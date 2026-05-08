@@ -1,5 +1,227 @@
 # LetMeSee
 
+LetMeSee 是一個以 WPF 與 .NET 9 製作的輕量 Windows 圖片檢視器。設計重點是快速開圖、鍵盤瀏覽、全螢幕檢視、GIF 動畫播放，以及能直接檢查目前圖片載入後狀態的資訊 overlay。
+
+## 功能
+
+- 可從命令列參數、開檔對話框、拖放檔案開啟圖片。
+- 可用方向鍵、滑鼠滾輪、PageUp/PageDown、Home、End 瀏覽同資料夾圖片。
+- 預設以全螢幕開啟；可用 `F` 或 `Enter` 切換全螢幕。
+- 可用 `Ctrl` + 滑鼠滾輪、`+`、`-` 縮放圖片。
+- `*` 可符合視窗大小；`/` 可顯示實際大小。
+- 圖片大於可視範圍時，可用方向鍵平移。
+- `Ctrl+C` 可複製目前圖片檔案。
+- `Delete` 可將目前圖片送到資源回收桶，並切換到下一張可用圖片。
+- 右鍵功能選單：
+  - 開啟檔案
+  - Save As
+  - 向左旋轉 90 度
+  - 向右旋轉 90 度
+  - 離開
+- Save As 支援 PNG、JPEG、BMP、GIF、TIFF；JPEG 品質設定為 `100`。
+- 支援 GIF 動畫播放。
+- 按 `V` 可顯示或隱藏左下角圖片詳細資訊。
+- 可切換目前使用者的檔案關聯與 Windows 檔案總管圖片右鍵選單。
+
+## 支援格式
+
+目前接受以下副檔名：
+
+- JPEG：`.jpg`, `.jpeg`
+- PNG：`.png`
+- BMP：`.bmp`
+- GIF：`.gif`
+- WebP：`.webp`
+- TIFF：`.tif`, `.tiff`
+- 透過 Windows Imaging Component codec 支援的 RAW：`.cr2`, `.cr3`, `.nef`, `.arw`, `.raf`, `.orf`, `.rw2`, `.dng`
+- 若 Windows 安裝必要 codec，則可支援 HEIF/HEIC：`.heic`, `.heif`
+
+實際能否解碼取決於 Windows Imaging Component 與使用者電腦已安裝的 codec。
+
+## 快捷鍵
+
+| 按鍵 | 功能 |
+| --- | --- |
+| `Ctrl+O` | 開啟圖片 |
+| `F` / `Enter` | 切換全螢幕 |
+| `Esc` | 關閉全螢幕視窗或離開 |
+| 滑鼠滾輪 | 上一張 / 下一張 |
+| `Ctrl` + 滑鼠滾輪 | 放大 / 縮小 |
+| `+` / `-` | 放大 / 縮小 |
+| `/` | 實際大小 |
+| `*` | 符合視窗大小 |
+| 方向鍵 | 圖片放大時平移，否則切換圖片 |
+| `PageUp` / `PageDown` | 上一張 / 下一張 |
+| `Home` / `End` | 同資料夾第一張 / 最後一張 |
+| `Ctrl+C` | 複製目前圖片檔案 |
+| `Delete` | 將目前圖片送到資源回收桶 |
+| `V` | 顯示 / 隱藏圖片詳細資訊 |
+
+## 圖片詳細資訊
+
+按 `V` 後，左下角會顯示紅色粗體資訊 overlay。內容包含程式能直接掌握的狀態：
+
+- 檔名與完整路徑
+- 檔案大小
+- 來源圖片解析度
+- 來源 pixel format 與 bits per pixel
+- 來源 DPI
+- 來源影格數
+- 是否偵測到內嵌 ICC/profile
+- 目前載入後 bitmap 解析度
+- 目前載入後 bitmap pixel format 與 bits per pixel
+- 目前載入後 bitmap DPI
+
+## 程式設計概要
+
+專案刻意維持小型架構，核心集中在單一 WPF 視窗與幾個服務類別。
+
+### `Program.cs`
+
+明確的程式進入點，負責：
+
+- 建立 WPF `App`。
+- 讀取第一個命令列參數作為可選圖片路徑。
+- 建立並執行 `MainWindow`。
+- 將啟動診斷寫入 `%LOCALAPPDATA%\LetMeSee\startup.log`。
+
+### `MainWindow.xaml`
+
+定義主要 UI：
+
+- 預設隱藏的選單列。
+- 黑色圖片 viewport。
+- 用於顯示圖片的 `Canvas` 與 `Image`。
+- 置中的載入與錯誤訊息。
+- 左下角圖片詳細資訊 overlay。
+- 右鍵功能選單。
+
+### `MainWindow.xaml.cs`
+
+包含大多數應用程式行為：
+
+- 圖片載入流程。
+- 同資料夾圖片列舉與自然排序。
+- 鍵盤與滑鼠操作。
+- 縮放、符合視窗、實際大小、平移、視窗尺寸調整。
+- 全螢幕與標題列顯示控制。
+- Save As 編碼。
+- 目前顯示圖片旋轉。
+- GIF 動畫播放。
+- 圖片詳細資訊 overlay 產生。
+- 刪除檔案與複製檔案到剪貼簿。
+
+### `Services/ImageLoader.cs`
+
+透過 WPF/WIC 載入圖片並快取解碼後的 `BitmapSource`。
+
+設計重點：
+
+- 使用 `BitmapCacheOption.OnLoad`，解碼後不會持續鎖住來源檔案。
+- 先將圖片檔案複製到記憶體，再建立 `BitmapImage`。
+- 解碼後呼叫 `Freeze()`，方便安全重複使用。
+- 預設 LRU 快取上限為 512 MB。
+- 若檔案大小或最後修改時間改變，快取會失效。
+
+### GIF 動畫處理
+
+GIF 動畫不走一般靜態圖片播放路徑，而是額外用 `GifBitmapDecoder` 讀取：
+
+- frame
+- frame delay
+- frame offset
+- disposal metadata
+
+很多 GIF frame 不是完整畫面，而是局部更新區塊。因此程式會先將每個 frame 合成為完整畫布大小的 bitmap，再透過 WPF `DispatcherTimer` 逐 frame 更新 `ImageView.Source` 播放。
+
+### `Services/FileAssociationRegistrar.cs`
+
+負責註冊與取消註冊目前使用者的 Windows 檔案關聯資訊：
+
+- 建立 `LetMeSee.Image` ProgID。
+- 將支援的圖片副檔名加入 Open With metadata。
+- 加入目前使用者的 Windows 檔案總管圖片右鍵指令：`Open with LetMeSee`。
+- 修改後通知 shell 更新關聯。
+
+這些操作不需要寫入 machine-wide registry。
+
+### `Services/AppSettings.cs`
+
+儲存簡單使用者設定：
+
+```text
+%APPDATA%\LetMeSee\settings.json
+```
+
+目前儲存是否預設全螢幕啟動。
+
+## Save As 行為
+
+Save As 會重新編碼目前顯示中的 bitmap，支援：
+
+- PNG
+- JPEG
+- BMP
+- GIF
+- TIFF
+
+輸出格式由存檔副檔名決定。JPEG 使用 `QualityLevel = 100`。
+
+目前 Save As 不保留動畫、ICC profile、EXIF 或其他 metadata。對動畫 GIF 來說，Save As 會存下目前顯示的單一 frame。
+
+## 建置
+
+需求：
+
+- Windows
+- .NET 9 SDK
+
+在 repository 根目錄建置：
+
+```powershell
+dotnet build
+```
+
+執行：
+
+```powershell
+dotnet run -- "C:\Path\To\image.jpg"
+```
+
+發佈 Windows x64 版本：
+
+```powershell
+dotnet publish -c Release -r win-x64 --self-contained true
+```
+
+建置輸出不會提交到 Git。
+
+## 檔案關聯腳本
+
+repository 包含兩個輔助腳本：
+
+- `Register-FileAssociations.ps1`
+- `Unregister-FileAssociations.ps1`
+
+這些腳本是 app 內建 Setup 選單之外的替代方式，用於更新目前使用者的 registry 關聯設定。
+
+## Repository 管理
+
+`.gitignore` 會排除本機建置輸出與機器相關檔案：
+
+- `bin/`
+- `obj/`
+- `publish/`
+- `.vs/`
+- IDE user files
+- logs、test output、coverage output、OS thumbnail files
+
+原始碼、assets、project files、helper scripts 會保留並提交。
+
+---
+
+# English
+
 LetMeSee is a lightweight Windows image viewer built with WPF and .NET 9. It focuses on fast image opening, keyboard-driven browsing, fullscreen viewing, animated GIF playback, and simple image inspection tools.
 
 ## Features
