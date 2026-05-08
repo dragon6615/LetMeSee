@@ -218,6 +218,13 @@ repository 包含兩個輔助腳本：
 
 原始碼、assets、project files、helper scripts 會保留並提交。
 
+## License
+
+Copyright © 2026 Dragon Huang. All rights reserved.
+
+This repository is public for viewing purposes only.
+No permission is granted to copy, modify, distribute, sublicense, or use this code in any commercial or non-commercial product without explicit written permission.
+
 ---
 
 # English
