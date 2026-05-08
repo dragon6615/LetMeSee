@@ -64,10 +64,10 @@
                                   Click="SaveAsMenuItem_Click" />
                         <Separator />
                         <MenuItem x:Name="RotateLeftContextMenuItem"
-                                  Header="向左旋轉 90 度"
+                                  Header="Turn Left 90°"
                                   Click="RotateLeftMenuItem_Click" />
                         <MenuItem x:Name="RotateRightContextMenuItem"
-                                  Header="向右旋轉 90 度"
+                                  Header="Turn Right 90°"
                                   Click="RotateRightMenuItem_Click" />
                         <Separator />
                         <MenuItem Header="E_xit" Click="ExitMenuItem_Click" />
