@@ -1,0 +1,40 @@
+# Build output
+bin/
+obj/
+publish/
+
+# User-specific IDE files
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Rider / ReSharper
+_ReSharper*/
+*.DotSettings.user
+
+# NuGet
+*.nupkg
+packages/
+
+# Logs and diagnostics
+*.log
+TestResults/
+coverage/
+*.coverage
+*.coveragexml
+
+# Local runtime/config artifacts
+*.tmp
+*.temp
+*.bak
+*.cache
+
+# OS files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
