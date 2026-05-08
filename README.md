@@ -72,6 +72,10 @@ LetMeSee 是一個以 WPF 與 .NET 9 製作的輕量 Windows 圖片檢視器。�
 - 目前載入後 bitmap pixel format 與 bits per pixel
 - 目前載入後 bitmap DPI
 
+## AI 接手文件
+
+給 AI 或新維護者快速理解專案的摘要請見 [docs/AI_CONTEXT.md](docs/AI_CONTEXT.md)。
+
 ## 程式設計概要
 
 專案刻意維持小型架構，核心集中在單一 WPF 視窗與幾個服務類別。
@@ -299,6 +303,10 @@ Press `V` to display a red, bold overlay in the lower-left corner. It shows info
 - Current loaded bitmap resolution
 - Current loaded bitmap pixel format and bits per pixel
 - Current loaded bitmap DPI
+
+## AI Handoff Notes
+
+For a compact project briefing for AI assistants or new maintainers, see [docs/AI_CONTEXT.md](docs/AI_CONTEXT.md).
 
 ## Design Overview
 
