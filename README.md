@@ -218,12 +218,11 @@ repository 包含兩個輔助腳本：
 
 原始碼、assets、project files、helper scripts 會保留並提交。
 
-## License
+## 授權
 
-Copyright © 2026 Dragon Huang. All rights reserved.
+本專案不是開源授權。原始碼公開供瀏覽用途，未授權複製、修改、散布、再發布、轉授權，或用於任何商業或非商業產品。
 
-This repository is public for viewing purposes only.
-No permission is granted to copy, modify, distribute, sublicense, or use this code in any commercial or non-commercial product without explicit written permission.
+詳細條款請見 [LICENSE.md](LICENSE.md)。
 
 ---
 
@@ -443,3 +442,9 @@ The `.gitignore` excludes local build output and machine-specific files:
 - logs, test output, coverage output, and OS thumbnail files
 
 Source files, assets, project files, and helper scripts are intended to be committed.
+
+## License
+
+This project is not open source. The source code is public for viewing purposes only. No permission is granted to copy, modify, distribute, republish, sublicense, or use this code in any commercial or non-commercial product.
+
+See [LICENSE.md](LICENSE.md) for details.
