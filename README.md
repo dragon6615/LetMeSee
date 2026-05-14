@@ -7,8 +7,8 @@ LetMeSee 是一個以 WPF 與 .NET 9 製作的輕量 Windows 圖片檢視器。�
 - 可從命令列參數、開檔對話框、拖放檔案開啟圖片。
 - 可用方向鍵、滑鼠滾輪、PageUp/PageDown、Home、End 瀏覽同資料夾圖片。
 - 預設以全螢幕開啟；可用 `F` 或 `Enter` 切換全螢幕。
-- 可用 `Ctrl` + 滑鼠滾輪、`+`、`-` 縮放圖片。
-- `*` 可符合視窗大小；`/` 可顯示實際大小。
+- 可用 `Ctrl` + 滑鼠滾輪、`+`、`-` 縮放圖片，或按 `1` / `2` / `3` 切換 1x / 2x / 3x；視窗模式下會跟著縮放後的圖片大小調整視窗。
+- `*` 可符合視窗大小；`/` 或 `1` 可顯示實際大小。
 - 圖片大於可視範圍時，可用方向鍵平移。
 - `Ctrl+C` 可複製目前圖片檔案。
 - `Delete` 可將目前圖片送到資源回收桶，並切換到下一張可用圖片。
@@ -48,7 +48,8 @@ LetMeSee 是一個以 WPF 與 .NET 9 製作的輕量 Windows 圖片檢視器。�
 | 滑鼠滾輪 | 上一張 / 下一張 |
 | `Ctrl` + 滑鼠滾輪 | 放大 / 縮小 |
 | `+` / `-` | 放大 / 縮小 |
-| `/` | 實際大小 |
+| `/` / `1` | 實際大小 |
+| `2` / `3` | 2 倍 / 3 倍大小 |
 | `*` | 符合視窗大小 |
 | 方向鍵 | 圖片放大時平移，否則切換圖片 |
 | `PageUp` / `PageDown` | 上一張 / 下一張 |
@@ -239,8 +240,8 @@ LetMeSee is a lightweight Windows image viewer built with WPF and .NET 9. It foc
 - Open image files from command-line arguments, the file dialog, or drag and drop.
 - Browse images in the same folder with arrow keys, mouse wheel, PageUp/PageDown, Home, and End.
 - Automatically starts in fullscreen by default, with `F` or `Enter` to toggle fullscreen.
-- Zoom with `Ctrl` + mouse wheel, `+`, and `-`.
-- Fit to window with `*`; show actual size with `/`.
+- Zoom with `Ctrl` + mouse wheel, `+`, and `-`, or press `1` / `2` / `3` for 1x / 2x / 3x; in windowed mode, the window follows the scaled image size.
+- Fit to window with `*`; show actual size with `/` or `1`.
 - Pan oversized images with arrow keys.
 - Copy the current image file with `Ctrl+C`.
 - Delete the current image file with `Delete`; the file is sent to the Recycle Bin.
@@ -280,7 +281,8 @@ Actual decoding depends on Windows Imaging Component and the codecs installed on
 | Mouse wheel | Previous / next image |
 | `Ctrl` + mouse wheel | Zoom in / out |
 | `+` / `-` | Zoom in / out |
-| `/` | Actual size |
+| `/` / `1` | Actual size |
+| `2` / `3` | 2x / 3x size |
 | `*` | Fit to window |
 | Arrow keys | Pan if zoomed, otherwise browse images |
 | `PageUp` / `PageDown` | Previous / next image |

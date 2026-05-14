@@ -328,6 +328,21 @@ public partial class MainWindow : Window
                 ActualSize();
                 e.Handled = true;
                 break;
+            case Key.D1 when Keyboard.Modifiers == ModifierKeys.None:
+            case Key.NumPad1 when Keyboard.Modifiers == ModifierKeys.None:
+                ActualSize();
+                e.Handled = true;
+                break;
+            case Key.D2 when Keyboard.Modifiers == ModifierKeys.None:
+            case Key.NumPad2 when Keyboard.Modifiers == ModifierKeys.None:
+                SetFixedScale(2);
+                e.Handled = true;
+                break;
+            case Key.D3 when Keyboard.Modifiers == ModifierKeys.None:
+            case Key.NumPad3 when Keyboard.Modifiers == ModifierKeys.None:
+                SetFixedScale(3);
+                e.Handled = true;
+                break;
             case Key.Multiply:
                 FitToWindow();
                 e.Handled = true;
@@ -1536,7 +1551,7 @@ public partial class MainWindow : Window
         ApplyMinimumWindowSizeForViewport(targetViewport);
     }
 
-    private void ResizeWindowForCurrentScale()
+    private void ResizeWindowForCurrentScale(bool keepWindowPosition = true)
     {
         if (_currentImage is null || _isFullScreen || WindowState == WindowState.Maximized)
         {
@@ -1548,13 +1563,9 @@ public partial class MainWindow : Window
         var scaledHeight = _imageHeight * _zoomScale;
         var targetViewport = CalculateTargetViewportSize(workArea, scaledWidth, scaledHeight);
 
-        if (scaledWidth > 0 && scaledHeight > 0)
-        {
-            _zoomScale *= Math.Min(targetViewport.Width / scaledWidth, targetViewport.Height / scaledHeight);
-        }
-
-        ResizeWindowForViewportSize(targetViewport, workArea);
-        ShowScaledImage(_zoomScale, stretchUniform: false);
+        ResetMinimumWindowSize();
+        ResizeWindowForViewportSize(targetViewport, workArea, keepWindowPosition);
+        ApplyMinimumWindowSizeForViewport(targetViewport);
     }
 
     private void ApplyMinimumWindowSizeForCurrentImage()
@@ -1639,15 +1650,7 @@ public partial class MainWindow : Window
 
     private void ActualSize()
     {
-        if (_currentImage is null)
-        {
-            return;
-        }
-
-        SetScale(1);
-        ResetImageOffset();
-        ShowScaledImage(1, stretchUniform: false);
-        _isFitMode = false;
+        SetFixedScale(1);
     }
 
     private void ZoomAtViewportCenter(double factor)
@@ -1665,6 +1668,20 @@ public partial class MainWindow : Window
         _zoomScale = scale;
     }
 
+    private void SetFixedScale(double scale)
+    {
+        if (_currentImage is null)
+        {
+            return;
+        }
+
+        SetScale(scale);
+        _isFitMode = false;
+        ResizeWindowForCurrentScale();
+        ResetImageOffset();
+        ShowScaledImage(scale, stretchUniform: false);
+    }
+
     private void Zoom(double factor)
     {
         if (_currentImage is null)
@@ -1676,8 +1693,10 @@ public partial class MainWindow : Window
             ? Math.Min(Viewport.ActualWidth / _imageWidth, Viewport.ActualHeight / _imageHeight)
             : _zoomScale;
         var scale = Math.Clamp(baseScale * factor, 0.02, 64);
-        ShowScaledImage(scale, stretchUniform: false);
+        SetScale(scale);
         _isFitMode = false;
+        ResizeWindowForCurrentScale();
+        ShowScaledImage(scale, stretchUniform: false);
     }
 
     private void ShowScaledImage(double scale, bool stretchUniform)
