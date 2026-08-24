@@ -1,4 +1,4 @@
-using System.IO;
+using LetMeSee.Services;
 using System.Windows;
 
 namespace LetMeSee;
@@ -10,7 +10,7 @@ public static class Program
     {
         try
         {
-            WriteStartupLog("Starting LetMeSee.");
+            DiagnosticLog.Write($"=== 啟動 LetMeSee，參數：{(args.Length > 0 ? string.Join(" ", args) : "(無)")}");
 
             var app = new App
             {
@@ -21,29 +21,19 @@ public static class Program
             var window = new MainWindow(imagePath);
             app.MainWindow = window;
 
-            WriteStartupLog("Showing main window.");
-            return app.Run(window);
+            var exitCode = app.Run(window);
+            DiagnosticLog.Write($"=== 結束，exit code {exitCode}");
+            return exitCode;
         }
         catch (Exception ex)
         {
-            WriteStartupLog(ex.ToString());
+            DiagnosticLog.Write("啟動失敗", ex);
             MessageBox.Show(
                 ex.Message,
-                "LetMeSee startup error",
+                "LetMeSee 啟動錯誤",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
             return 1;
         }
-    }
-
-    private static void WriteStartupLog(string message)
-    {
-        var directory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "LetMeSee");
-        Directory.CreateDirectory(directory);
-
-        var line = $"{DateTimeOffset.Now:O} {message}{Environment.NewLine}";
-        File.AppendAllText(Path.Combine(directory, "startup.log"), line);
     }
 }

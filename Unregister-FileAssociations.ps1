@@ -2,7 +2,7 @@ param(
     [string]$ExeName = "LetMeSee.exe"
 )
 
-$extensions = ".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp", ".tif", ".tiff"
+$extensions = ".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp", ".tif", ".tiff", ".cr2", ".cr3", ".nef", ".arw", ".raf", ".orf", ".rw2", ".dng", ".heic", ".heif"
 $progId = "LetMeSee.Image"
 $appName = "LetMeSee"
 $applicationKey = "HKCU:\Software\Classes\Applications\$ExeName"
@@ -43,4 +43,4 @@ public static class ShellChangeNotifier
 [ShellChangeNotifier]::SHChangeNotify(0x08000000, 0, [IntPtr]::Zero, [IntPtr]::Zero)
 
 Write-Host "Removed LetMeSee file association registration for: $($extensions -join ', ')"
-Write-Host "Removed image right-click command: Open with LetMeSee"
+Write-Host "Removed image right-click command: 用 LetMeSee 開啟"

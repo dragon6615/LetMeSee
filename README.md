@@ -7,21 +7,24 @@ LetMeSee 是一個以 WPF 與 .NET 9 製作的輕量 Windows 圖片檢視器。�
 - 可從命令列參數、開檔對話框、拖放檔案開啟圖片。
 - 可用方向鍵、滑鼠滾輪、PageUp/PageDown、Home、End 瀏覽同資料夾圖片。
 - 預設以全螢幕開啟；可用 `F` 或 `Enter` 切換全螢幕。
-- 可用 `Ctrl` + 滑鼠滾輪、`+`、`-` 縮放圖片，或按 `1` / `2` / `3` 切換 1x / 2x / 3x；視窗模式下會跟著縮放後的圖片大小調整視窗。
+- 視窗模式會顯示功能表，全螢幕則收起；全螢幕下按 `Alt` 或雙擊畫面可以叫出功能表。
+- 可用 `Ctrl` + 滑鼠滾輪、`+`、`-` 縮放圖片，或按 `1` / `2` / `3` 切換 1x / 2x / 3x；視窗模式下會跟著縮放後的圖片大小調整視窗。`Ctrl` + 滑鼠滾輪會以游標位置為中心縮放。
 - `*` 可符合視窗大小；`/` 或 `1` 可顯示實際大小。
-- 圖片大於可視範圍時，可用方向鍵平移。
+- 圖片大於可視範圍時，可用方向鍵或直接用滑鼠左鍵拖曳平移。圖片沒有超出範圍時，拖曳仍然是移動視窗。
 - `Ctrl+C` 可複製目前圖片檔案。
-- `Delete` 可將目前圖片送到資源回收桶，並切換到下一張可用圖片。
+- `Delete` 會先詢問，確認後才將目前圖片送到資源回收桶，並切換到下一張可用圖片。
 - 右鍵功能選單：
   - 開啟檔案
-  - Save As
+  - 另存新檔
   - 向左旋轉 90 度
   - 向右旋轉 90 度
   - 離開
+- 介面文字為繁體中文。
 - Save As 支援 PNG、JPEG、BMP、GIF、TIFF；JPEG 品質設定為 `100`。
-- 支援 GIF 動畫播放。
+- 支援 GIF 動畫播放，並遵守 GIF 本身的循環次數設定。
 - 按 `V` 可顯示或隱藏左下角圖片詳細資訊。
-- 可切換目前使用者的檔案關聯與 Windows 檔案總管圖片右鍵選單。
+- 「說明 > 開啟診斷紀錄」可查看啟動、圖片載入、檔案關聯與例外的紀錄（`%LOCALAPPDATA%\LetMeSee\letmesee.log`）。
+- 功能表「設定 > 檔案關聯...」提供設定頁面，可逐一勾選要關聯的副檔名，以及是否在圖片右鍵選單顯示「用 LetMeSee 開啟」。
 
 ## 支援格式
 
@@ -52,10 +55,12 @@ LetMeSee 是一個以 WPF 與 .NET 9 製作的輕量 Windows 圖片檢視器。�
 | `2` / `3` | 2 倍 / 3 倍大小 |
 | `*` | 符合視窗大小 |
 | 方向鍵 | 圖片放大時平移，否則切換圖片 |
+| 滑鼠左鍵拖曳 | 圖片放大時平移，否則移動視窗 |
 | `PageUp` / `PageDown` | 上一張 / 下一張 |
 | `Home` / `End` | 同資料夾第一張 / 最後一張 |
 | `Ctrl+C` | 複製目前圖片檔案 |
-| `Delete` | 將目前圖片送到資源回收桶 |
+| `Delete` | 將目前圖片送到資源回收桶（會先確認） |
+| `Alt` | 全螢幕時叫出功能表；視窗模式為標準的功能表操作 |
 | `V` | 顯示 / 隱藏圖片詳細資訊 |
 
 ## 圖片詳細資訊
@@ -88,7 +93,7 @@ LetMeSee 是一個以 WPF 與 .NET 9 製作的輕量 Windows 圖片檢視器。�
 - 建立 WPF `App`。
 - 讀取第一個命令列參數作為可選圖片路徑。
 - 建立並執行 `MainWindow`。
-- 將啟動診斷寫入 `%LOCALAPPDATA%\LetMeSee\startup.log`。
+- 將診斷紀錄寫入 `%LOCALAPPDATA%\LetMeSee\letmesee.log`，超過 256 KB 會輪替成 `.old`。
 
 ### `MainWindow.xaml`
 
@@ -139,16 +144,19 @@ GIF 動畫不走一般靜態圖片播放路徑，而是額外用 `GifBitmapDecod
 
 很多 GIF frame 不是完整畫面，而是局部更新區塊。因此程式會先將每個 frame 合成為完整畫布大小的 bitmap，再透過 WPF `DispatcherTimer` 逐 frame 更新 `ImageView.Source` 播放。
 
+合成工作在背景 STA 執行緒進行，載入長動畫時不會卡住視窗。合成後的 frame 全部是完整畫布大小，因此記憶體用量可能遠大於檔案大小；預估超過 384 MB 的動畫不會被合成，改為顯示靜態的第一個 frame。
+
 ### `Services/FileAssociationRegistrar.cs`
 
-負責註冊與取消註冊目前使用者的 Windows 檔案關聯資訊：
+負責讀取與套用目前使用者的 Windows 檔案關聯資訊：
 
-- 建立 `LetMeSee.Image` ProgID。
-- 將支援的圖片副檔名加入 Open With metadata。
-- 加入目前使用者的 Windows 檔案總管圖片右鍵指令：`Open with LetMeSee`。
+- `GetRegisteredExtensions()` 回報目前實際已關聯的副檔名，設定頁面用它決定勾選狀態。
+- `GetRegisteredExecutablePath()` 回報關聯目前指向哪一個執行檔，用來提醒關聯指到舊的複本。
+- `Apply(extensions, addImageContextMenu)` 讓 registry 與勾選結果一致：勾選的寫入、沒勾選的移除，兩者都空就整組移除。
+- 建立 `LetMeSee.Image` ProgID、`Capabilities`、Open With metadata 與圖片右鍵指令「用 LetMeSee 開啟」。
 - 修改後通知 shell 更新關聯。
 
-這些操作不需要寫入 machine-wide registry。
+這些操作不需要寫入 machine-wide registry。副檔名清單來自 `Services/SupportedImageFormats.cs`。
 
 ### `Services/AppSettings.cs`
 
@@ -208,7 +216,7 @@ repository 包含兩個輔助腳本：
 - `Register-FileAssociations.ps1`
 - `Unregister-FileAssociations.ps1`
 
-這些腳本是 app 內建 Setup 選單之外的替代方式，用於更新目前使用者的 registry 關聯設定。
+這些腳本是 app 內建設定頁面之外的替代方式，用於更新目前使用者的 registry 關聯設定，處理的副檔名與 app 內的「全選」相同。
 
 ## Repository 管理
 
@@ -240,11 +248,12 @@ LetMeSee is a lightweight Windows image viewer built with WPF and .NET 9. It foc
 - Open image files from command-line arguments, the file dialog, or drag and drop.
 - Browse images in the same folder with arrow keys, mouse wheel, PageUp/PageDown, Home, and End.
 - Automatically starts in fullscreen by default, with `F` or `Enter` to toggle fullscreen.
-- Zoom with `Ctrl` + mouse wheel, `+`, and `-`, or press `1` / `2` / `3` for 1x / 2x / 3x; in windowed mode, the window follows the scaled image size.
+- The menu bar is part of the windowed layout and is collapsed in fullscreen; press `Alt` or double-click the image in fullscreen to bring it up.
+- Zoom with `Ctrl` + mouse wheel, `+`, and `-`, or press `1` / `2` / `3` for 1x / 2x / 3x; in windowed mode, the window follows the scaled image size. `Ctrl` + mouse wheel zooms around the pointer.
 - Fit to window with `*`; show actual size with `/` or `1`.
-- Pan oversized images with arrow keys.
+- Pan oversized images with the arrow keys or by dragging with the left mouse button. When the image fits, dragging still moves the window.
 - Copy the current image file with `Ctrl+C`.
-- Delete the current image file with `Delete`; the file is sent to the Recycle Bin.
+- Delete the current image file with `Delete`; the app asks for confirmation and the file is sent to the Recycle Bin.
 - Right-click context menu:
   - Open file
   - Save As
@@ -252,9 +261,10 @@ LetMeSee is a lightweight Windows image viewer built with WPF and .NET 9. It foc
   - Rotate right 90 degrees
   - Exit
 - Save As supports PNG, JPEG, BMP, GIF, and TIFF. JPEG quality is set to 100.
-- GIF animation playback is supported.
+- GIF animation playback is supported, honoring the loop count stored in the file.
 - Press `V` to show or hide image details in the lower-left corner.
-- Optional current-user file association and Explorer image context-menu registration.
+- 說明 > 開啟診斷紀錄 opens a diagnostic log of startup, image loads, file association changes, and unhandled exceptions (`%LOCALAPPDATA%\LetMeSee\letmesee.log`).
+- A settings page under 設定 > 檔案關聯... lets you tick individual extensions to associate, plus whether to add the image right-click command.
 
 ## Supported Formats
 
@@ -285,10 +295,12 @@ Actual decoding depends on Windows Imaging Component and the codecs installed on
 | `2` / `3` | 2x / 3x size |
 | `*` | Fit to window |
 | Arrow keys | Pan if zoomed, otherwise browse images |
+| Left-button drag | Pan if zoomed, otherwise move the window |
 | `PageUp` / `PageDown` | Previous / next image |
 | `Home` / `End` | First / last image in folder |
 | `Ctrl+C` | Copy current image file |
-| `Delete` | Send current image file to Recycle Bin |
+| `Delete` | Send current image file to Recycle Bin (with confirmation) |
+| `Alt` | Reveal the menu bar in fullscreen; standard menu access when windowed |
 | `V` | Show / hide image details overlay |
 
 ## Image Details Overlay
@@ -321,7 +333,7 @@ The project is intentionally small and centered around a single WPF window.
 - Creates the WPF `App`.
 - Reads the first command-line argument as an optional image path.
 - Creates and runs `MainWindow`.
-- Writes startup diagnostics to `%LOCALAPPDATA%\LetMeSee\startup.log`.
+- Writes diagnostics to `%LOCALAPPDATA%\LetMeSee\letmesee.log`, rotating to `.old` past 256 KB.
 
 ### `MainWindow.xaml`
 
@@ -369,16 +381,19 @@ The app uses `GifBitmapDecoder` to read GIF frames, frame delays, frame offsets,
 
 Playback is driven by a WPF `DispatcherTimer`, and each timer tick updates `ImageView.Source` to the next precomposited frame.
 
+Compositing runs on a background STA thread so that loading a long animation does not freeze the window. Because every composited frame is full canvas size, memory use can be much larger than the file itself; animations estimated above 384 MB are not composited and the static first frame is shown instead.
+
 ### `Services/FileAssociationRegistrar.cs`
 
-Registers and unregisters current-user Windows file association information:
+Reads and applies current-user Windows file association information:
 
-- Creates a `LetMeSee.Image` ProgID.
-- Adds supported image extensions to Open With metadata.
-- Adds a current-user Explorer image right-click command: `Open with LetMeSee`.
+- `GetRegisteredExtensions()` reports which extensions are actually associated right now; the settings page uses it to decide the tick state.
+- `GetRegisteredExecutablePath()` reports which executable the association points at, so a stale registration from another copy can be flagged.
+- `Apply(extensions, addImageContextMenu)` makes the registry match the selection: ticked extensions are written, unticked ones removed, and an empty selection removes the registration entirely.
+- Creates the `LetMeSee.Image` ProgID, `Capabilities`, Open With metadata, and the image right-click command.
 - Notifies the shell after changes.
 
-This does not require machine-wide registry writes.
+This does not require machine-wide registry writes. The extension list comes from `Services/SupportedImageFormats.cs`.
 
 ### `Services/AppSettings.cs`
 
@@ -438,7 +453,7 @@ The repository includes helper scripts:
 - `Register-FileAssociations.ps1`
 - `Unregister-FileAssociations.ps1`
 
-These scripts are alternatives to the in-app setup menu and update current-user registry entries.
+These scripts are alternatives to the in-app settings page and update current-user registry entries, covering the same extensions as the page's Select All.
 
 ## Repository Hygiene
 

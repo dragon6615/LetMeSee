@@ -113,21 +113,17 @@ bin\Release\net9.0-windows\win-x64\publish\
 bin\Release\net9.0-windows\win-x64\publish\
 ```
 
-## 建議指定清楚的 publish 輸出位置
+## 輸出位置：使用 .NET 預設
 
-為了讓輸出位置更直覺，建議指定 `-o`：
-
-```powershell
-dotnet publish -c Release -r win-x64 --self-contained true -o .\publish\win-x64
-```
-
-這樣發佈結果會集中在：
+本專案不覆寫 publish 的輸出位置，一律使用 .NET 預設路徑：
 
 ```text
-publish\win-x64\
+bin\Release\net9.0-windows\win-x64\publish\
 ```
 
-如果要交付給使用者，可以壓縮這個資料夾的內容。
+要交付給使用者時，壓縮這個資料夾的內容即可。
+
+`dotnet publish` 可以用 `-o` 指定其他位置，但本專案刻意不使用，讓 publish 產物和 `dotnet build` 的輸出留在同一棵目錄樹下，少記一組規則。
 
 ## Framework-dependent 與 Self-contained
 
@@ -136,7 +132,7 @@ publish\win-x64\
 指令：
 
 ```powershell
-dotnet publish -c Release -r win-x64 --self-contained true -o .\publish\win-x64
+dotnet publish -c Release -r win-x64 --self-contained true
 ```
 
 特性：
@@ -150,7 +146,7 @@ dotnet publish -c Release -r win-x64 --self-contained true -o .\publish\win-x64
 指令：
 
 ```powershell
-dotnet publish -c Release -r win-x64 --self-contained false -o .\publish\win-x64-framework-dependent
+dotnet publish -c Release -r win-x64 --self-contained false
 ```
 
 特性：
@@ -176,7 +172,7 @@ dotnet build -c Release
 產生可交付版本：
 
 ```powershell
-dotnet publish -c Release -r win-x64 --self-contained true -o .\publish\win-x64
+dotnet publish -c Release -r win-x64 --self-contained true
 ```
 
 ## Git 注意事項
@@ -188,6 +184,8 @@ bin/
 obj/
 publish/
 ```
+
+因為使用預設輸出位置，publish 產物落在 `bin/` 底下，已經被排除。`publish/` 這條保留著，只是在有人臨時用 `-o` 改路徑時當保險。
 
 因此 Debug、Release、publish 產物都不會被提交到 GitHub。
 

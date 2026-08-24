@@ -14,34 +14,34 @@
         AllowDrop="True"
         Drop="Window_Drop"
         DragOver="Window_DragOver"
-        KeyDown="Window_KeyDown">
+        KeyDown="Window_KeyDown"
+        KeyUp="Window_KeyUp">
     <Grid>
         <DockPanel>
             <Menu x:Name="MainMenu"
                   DockPanel.Dock="Top"
-                  Visibility="Collapsed"
                   Background="#E8E8E8"
                   Foreground="#111111"
                   FontSize="16">
-                <MenuItem Header="_File">
-                    <MenuItem Header="_Open..." InputGestureText="Ctrl+O" Click="OpenMenuItem_Click" />
+                <MenuItem Header="檔案(_F)">
+                    <MenuItem Header="開啟(_O)..." InputGestureText="Ctrl+O" Click="OpenMenuItem_Click" />
                     <Separator />
-                    <MenuItem Header="E_xit" Click="ExitMenuItem_Click" />
+                    <MenuItem Header="離開(_X)" Click="ExitMenuItem_Click" />
                 </MenuItem>
-                <MenuItem Header="_View">
-                    <MenuItem Header="_Actual Size" InputGestureText="/" Click="ActualSizeMenuItem_Click" />
-                    <MenuItem Header="_Fit to Window" InputGestureText="*" Click="FitToWindowMenuItem_Click" />
+                <MenuItem Header="檢視(_V)">
+                    <MenuItem Header="實際大小(_A)" InputGestureText="/" Click="ActualSizeMenuItem_Click" />
+                    <MenuItem Header="符合視窗大小(_W)" InputGestureText="*" Click="FitToWindowMenuItem_Click" />
                     <Separator />
-                    <MenuItem Header="_Full Screen" InputGestureText="F" Click="FullScreenMenuItem_Click" />
+                    <MenuItem Header="全螢幕(_F)" InputGestureText="F" Click="FullScreenMenuItem_Click" />
                 </MenuItem>
-                <MenuItem Header="_Setup">
-                    <MenuItem x:Name="FileAssociationsMenuItem"
-                              Header="檔案關聯"
-                              IsCheckable="True"
+                <MenuItem Header="設定(_S)">
+                    <MenuItem Header="檔案關聯(_A)..."
                               Click="FileAssociationsMenuItem_Click" />
                 </MenuItem>
-                <MenuItem Header="_Help">
-                    <MenuItem Header="_About" Click="AboutMenuItem_Click" />
+                <MenuItem Header="說明(_H)">
+                    <MenuItem Header="開啟診斷紀錄(_L)" Click="OpenDiagnosticLogMenuItem_Click" />
+                    <Separator />
+                    <MenuItem Header="關於(_B)" Click="AboutMenuItem_Click" />
                 </MenuItem>
             </Menu>
 
@@ -57,20 +57,20 @@
                     SizeChanged="Viewport_SizeChanged">
                 <Border.ContextMenu>
                     <ContextMenu Opened="ViewportContextMenu_Opened">
-                        <MenuItem Header="_Open File..." InputGestureText="Ctrl+O" Click="OpenMenuItem_Click" />
+                        <MenuItem Header="開啟檔案(_O)..." InputGestureText="Ctrl+O" Click="OpenMenuItem_Click" />
                         <Separator />
                         <MenuItem x:Name="SaveAsContextMenuItem"
-                                  Header="Save _As..."
+                                  Header="另存新檔(_A)..."
                                   Click="SaveAsMenuItem_Click" />
                         <Separator />
                         <MenuItem x:Name="RotateLeftContextMenuItem"
-                                  Header="Turn Left 90°"
+                                  Header="向左旋轉 90 度(_L)"
                                   Click="RotateLeftMenuItem_Click" />
                         <MenuItem x:Name="RotateRightContextMenuItem"
-                                  Header="Turn Right 90°"
+                                  Header="向右旋轉 90 度(_R)"
                                   Click="RotateRightMenuItem_Click" />
                         <Separator />
-                        <MenuItem Header="E_xit" Click="ExitMenuItem_Click" />
+                        <MenuItem Header="離開(_X)" Click="ExitMenuItem_Click" />
                     </ContextMenu>
                 </Border.ContextMenu>
 

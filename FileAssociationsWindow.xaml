@@ -1,0 +1,156 @@
+<Window x:Class="LetMeSee.FileAssociationsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="檔案關聯"
+        Width="600"
+        Height="700"
+        MinWidth="480"
+        MinHeight="480"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        Background="#FFFFFF"
+        FontSize="14"
+        TextOptions.TextFormattingMode="Display">
+    <Window.Resources>
+        <Style TargetType="Button">
+            <Setter Property="Padding" Value="14,6" />
+            <Setter Property="MinWidth" Value="92" />
+        </Style>
+        <Style x:Key="CardBorder" TargetType="Border">
+            <Setter Property="Background" Value="#FAFAFA" />
+            <Setter Property="BorderBrush" Value="#E2E2E2" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="14,11" />
+            <Setter Property="Margin" Value="0,0,0,8" />
+        </Style>
+        <Style x:Key="CardTitle" TargetType="TextBlock">
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="FontSize" Value="15" />
+        </Style>
+        <Style x:Key="CardDescription" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#6B6B6B" />
+            <Setter Property="FontSize" Value="12.5" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Margin" Value="26,3,0,0" />
+        </Style>
+    </Window.Resources>
+
+    <DockPanel Margin="18,16,18,16">
+        <TextBlock DockPanel.Dock="Top"
+                   TextWrapping="Wrap"
+                   Foreground="#333333"
+                   Margin="0,0,0,12"
+                   Text="勾選要讓 LetMeSee 出現在「開啟方式」清單中的圖片格式。設定只寫入目前使用者的登錄檔，不需要系統管理員權限。" />
+
+        <Border DockPanel.Dock="Top"
+                Background="#F0F4FA"
+                BorderBrush="#C9D8EC"
+                BorderThickness="1"
+                CornerRadius="6"
+                Padding="14,11"
+                Margin="0,0,0,14">
+            <StackPanel>
+                <TextBlock Text="套用後會關聯到這個執行檔" FontWeight="SemiBold" Foreground="#2A4A73" />
+                <TextBlock x:Name="ExecutablePathText"
+                           TextWrapping="Wrap"
+                           Margin="0,3,0,0"
+                           FontFamily="Consolas, Cascadia Mono, Courier New"
+                           FontSize="12.5"
+                           Foreground="#33475F" />
+                <Border x:Name="StaleRegistrationPanel"
+                        Background="#FDF0F0"
+                        BorderBrush="#E7B7B7"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Padding="10,8"
+                        Margin="0,10,0,0"
+                        Visibility="Collapsed">
+                    <StackPanel>
+                        <TextBlock Text="目前的關聯指向另一份執行檔" FontWeight="SemiBold" Foreground="#A32020" />
+                        <TextBlock x:Name="StaleRegistrationText"
+                                   TextWrapping="Wrap"
+                                   Margin="0,3,0,0"
+                                   FontFamily="Consolas, Cascadia Mono, Courier New"
+                                   FontSize="12.5"
+                                   Foreground="#A32020" />
+                        <TextBlock Text="按下「套用」後會改成指向上面那一份。"
+                                   TextWrapping="Wrap"
+                                   Margin="0,4,0,0"
+                                   FontSize="12.5"
+                                   Foreground="#A32020" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </Border>
+
+        <Border DockPanel.Dock="Bottom" Style="{StaticResource CardBorder}" Margin="0,12,0,0">
+            <StackPanel>
+                <CheckBox x:Name="ContextMenuCheckBox" VerticalContentAlignment="Center">
+                    <TextBlock Text="圖片右鍵選單" Style="{StaticResource CardTitle}" />
+                </CheckBox>
+                <TextBlock Style="{StaticResource CardDescription}"
+                           Text="在檔案總管的圖片上按右鍵時，顯示「用 LetMeSee 開啟」。" />
+            </StackPanel>
+        </Border>
+
+        <DockPanel DockPanel.Dock="Bottom" Margin="0,14,0,0">
+            <TextBlock x:Name="SelectionSummaryText"
+                       DockPanel.Dock="Left"
+                       VerticalAlignment="Center"
+                       Foreground="#5A5A5A"
+                       FontSize="13" />
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="全選" Margin="0,0,8,0" Click="SelectAllButton_Click" />
+                <Button Content="全部取消" Margin="0,0,8,0" Click="SelectNoneButton_Click" />
+                <Button Content="套用" Margin="0,0,8,0" IsDefault="True" Click="ApplyButton_Click" />
+                <Button Content="取消" IsCancel="True" Click="CancelButton_Click" />
+            </StackPanel>
+        </DockPanel>
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,6,0">
+            <ItemsControl x:Name="FormatGroupList">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Style="{StaticResource CardBorder}">
+                            <StackPanel>
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Right"
+                                               VerticalAlignment="Center"
+                                               Foreground="#8A8A8A"
+                                               FontSize="12.5"
+                                               Text="{Binding CountSummary}" />
+                                    <CheckBox IsThreeState="True"
+                                              IsChecked="{Binding IsGroupSelected, Mode=OneWay}"
+                                              Click="GroupCheckBox_Click"
+                                              VerticalContentAlignment="Center">
+                                        <TextBlock Text="{Binding DisplayName}" Style="{StaticResource CardTitle}" />
+                                    </CheckBox>
+                                </DockPanel>
+
+                                <TextBlock Text="{Binding Description}" Style="{StaticResource CardDescription}" />
+
+                                <ItemsControl ItemsSource="{Binding Choices}" Margin="26,8,0,0">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <CheckBox Content="{Binding Extension}"
+                                                      IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                      MinWidth="78"
+                                                      Margin="0,3,14,3"
+                                                      VerticalContentAlignment="Center" />
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

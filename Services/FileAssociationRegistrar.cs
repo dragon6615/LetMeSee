@@ -12,50 +12,110 @@ public static class FileAssociationRegistrar
     private const string ContextMenuKeyPath = @"Software\Classes\SystemFileAssociations\image\shell\LetMeSee";
     private const string RegisteredApplicationsKeyPath = @"Software\RegisteredApplications";
 
-    private static readonly string[] Extensions =
-    [
-        ".jpg",
-        ".jpeg",
-        ".png",
-        ".bmp",
-        ".gif",
-        ".webp",
-        ".tif",
-        ".tiff"
-    ];
-
-    public static bool IsRegistered()
+    /// <summary>
+    /// Extensions currently listed under the LetMeSee ProgID in the user's Open With metadata.
+    /// </summary>
+    public static IReadOnlyList<string> GetRegisteredExtensions()
     {
-        using var openCommandKey = Registry.CurrentUser.OpenSubKey($@"Software\Classes\{ProgId}\shell\open\command");
-        using var registeredApplicationsKey = Registry.CurrentUser.OpenSubKey(RegisteredApplicationsKeyPath);
-        using var contextMenuKey = Registry.CurrentUser.OpenSubKey(ContextMenuKeyPath);
-
-        return openCommandKey?.GetValue("") is string openCommand && !string.IsNullOrWhiteSpace(openCommand) ||
-            registeredApplicationsKey?.GetValue(AppName) is string registeredApplication && !string.IsNullOrWhiteSpace(registeredApplication) ||
-            contextMenuKey is not null;
+        var registered = SupportedImageFormats.Extensions.Where(IsExtensionRegistered).ToArray();
+        DiagnosticLog.Write($"讀取檔案關聯：已註冊 {registered.Length} 種 [{string.Join(" ", registered)}]，" +
+            $"右鍵選單={IsImageContextMenuRegistered()}，指向={GetRegisteredExecutablePath() ?? "(無)"}");
+        return registered;
     }
 
-    public static void Register()
+    public static bool IsExtensionRegistered(string extension)
+    {
+        using var openWithProgIdsKey = Registry.CurrentUser.OpenSubKey($@"Software\Classes\{extension}\OpenWithProgids");
+        return openWithProgIdsKey?.GetValue(ProgId) is not null;
+    }
+
+    public static bool IsImageContextMenuRegistered()
+    {
+        using var contextMenuKey = Registry.CurrentUser.OpenSubKey($@"{ContextMenuKeyPath}\command");
+        return contextMenuKey?.GetValue("") is string command && !string.IsNullOrWhiteSpace(command);
+    }
+
+    /// <summary>
+    /// Executable the current registration points at, or null when nothing is registered. Lets the
+    /// caller notice that an older copy of LetMeSee owns the association.
+    /// </summary>
+    public static string? GetRegisteredExecutablePath()
+    {
+        using var openCommandKey = Registry.CurrentUser.OpenSubKey($@"Software\Classes\{ProgId}\shell\open\command");
+        return openCommandKey?.GetValue("") is string command
+            ? ExtractExecutablePath(command)
+            : null;
+    }
+
+    public static string GetCurrentExecutablePath()
     {
         var exePath = Environment.ProcessPath ??
             Process.GetCurrentProcess().MainModule?.FileName ??
             throw new InvalidOperationException("Cannot resolve LetMeSee.exe path.");
 
-        exePath = Path.GetFullPath(exePath);
+        return Path.GetFullPath(exePath);
+    }
+
+    /// <summary>
+    /// Makes the registry match the requested selection: selected extensions are registered against
+    /// the running executable, everything else is removed. An empty selection with no context menu
+    /// removes the registration entirely.
+    /// </summary>
+    public static void Apply(IReadOnlyCollection<string> extensions, bool addImageContextMenu)
+    {
+        var exePath = GetCurrentExecutablePath();
         if (!File.Exists(exePath))
         {
             throw new FileNotFoundException("LetMeSee.exe does not exist.", exePath);
         }
 
-        Register(exePath);
+        DiagnosticLog.Write($"套用檔案關聯：勾選 {extensions.Count} 種 [{string.Join(" ", extensions)}]，" +
+            $"右鍵選單={addImageContextMenu}，執行檔={exePath}");
+
+        if (extensions.Count == 0 && !addImageContextMenu)
+        {
+            Unregister();
+            return;
+        }
+
+        Apply(exePath, extensions, addImageContextMenu);
+        DiagnosticLog.Write($"套用完成：實際註冊 [{string.Join(" ", SupportedImageFormats.Extensions.Where(IsExtensionRegistered))}]");
     }
 
-    public static void Register(string exePath)
+    public static void Unregister()
+    {
+        var exePath = Environment.ProcessPath ??
+            Process.GetCurrentProcess().MainModule?.FileName ??
+            throw new InvalidOperationException("Cannot resolve LetMeSee.exe path.");
+
+        var appExeName = Path.GetFileName(exePath);
+        var applicationKeyPath = $@"Software\Classes\Applications\{appExeName}";
+
+        foreach (var extension in SupportedImageFormats.Extensions)
+        {
+            RemoveExtensionFromOpenWith(extension);
+        }
+
+        Registry.CurrentUser.DeleteSubKeyTree($@"Software\Classes\{ProgId}", throwOnMissingSubKey: false);
+        Registry.CurrentUser.DeleteSubKeyTree(applicationKeyPath, throwOnMissingSubKey: false);
+        Registry.CurrentUser.DeleteSubKeyTree(ContextMenuKeyPath, throwOnMissingSubKey: false);
+
+        using (var registeredApplicationsKey = Registry.CurrentUser.OpenSubKey(RegisteredApplicationsKeyPath, true))
+        {
+            registeredApplicationsKey?.DeleteValue(AppName, throwOnMissingValue: false);
+        }
+
+        NotifyShellAssociationsChanged();
+        DiagnosticLog.Write("已移除所有檔案關聯。");
+    }
+
+    private static void Apply(string exePath, IReadOnlyCollection<string> extensions, bool addImageContextMenu)
     {
         var appExeName = Path.GetFileName(exePath);
         var command = $"\"{exePath}\" \"%1\"";
         var applicationKeyPath = $@"Software\Classes\Applications\{appExeName}";
         var capabilitiesKeyPath = $@"{applicationKeyPath}\Capabilities";
+        var selectedExtensions = new HashSet<string>(extensions, StringComparer.OrdinalIgnoreCase);
 
         using (var progIdKey = Registry.CurrentUser.CreateSubKey($@"Software\Classes\{ProgId}", true))
         {
@@ -83,11 +143,31 @@ public static class FileAssociationRegistrar
             applicationOpenCommandKey.SetValue("", command);
         }
 
+        // Rebuild the format lists from scratch so extensions the user just cleared disappear.
+        Registry.CurrentUser.DeleteSubKeyTree($@"{applicationKeyPath}\SupportedTypes", throwOnMissingSubKey: false);
+        Registry.CurrentUser.DeleteSubKeyTree($@"{capabilitiesKeyPath}\FileAssociations", throwOnMissingSubKey: false);
+
         using (var supportedTypesKey = Registry.CurrentUser.CreateSubKey($@"{applicationKeyPath}\SupportedTypes", true))
         using (var fileAssociationsKey = Registry.CurrentUser.CreateSubKey($@"{capabilitiesKeyPath}\FileAssociations", true))
         {
-            foreach (var extension in Extensions)
+            foreach (var extension in SupportedImageFormats.Extensions)
             {
+                if (!selectedExtensions.Contains(extension))
+                {
+                    if (IsExtensionRegistered(extension))
+                    {
+                        DiagnosticLog.Write($"  移除 {extension}");
+                    }
+
+                    RemoveExtensionFromOpenWith(extension);
+                    continue;
+                }
+
+                if (!IsExtensionRegistered(extension))
+                {
+                    DiagnosticLog.Write($"  新增 {extension}");
+                }
+
                 supportedTypesKey.SetValue(extension, "");
                 fileAssociationsKey.SetValue(extension, ProgId);
 
@@ -107,45 +187,44 @@ public static class FileAssociationRegistrar
             registeredApplicationsKey.SetValue(AppName, $@"Software\Classes\Applications\{appExeName}\Capabilities");
         }
 
-        using (var contextMenuKey = Registry.CurrentUser.CreateSubKey(ContextMenuKeyPath, true))
+        if (addImageContextMenu)
         {
-            contextMenuKey.SetValue("MUIVerb", "Open with LetMeSee");
+            using var contextMenuKey = Registry.CurrentUser.CreateSubKey(ContextMenuKeyPath, true);
+            contextMenuKey.SetValue("MUIVerb", "用 LetMeSee 開啟");
             contextMenuKey.SetValue("Icon", exePath);
-        }
 
-        using (var contextMenuCommandKey = Registry.CurrentUser.CreateSubKey($@"{ContextMenuKeyPath}\command", true))
-        {
+            using var contextMenuCommandKey = Registry.CurrentUser.CreateSubKey($@"{ContextMenuKeyPath}\command", true);
             contextMenuCommandKey.SetValue("", command);
+        }
+        else
+        {
+            Registry.CurrentUser.DeleteSubKeyTree(ContextMenuKeyPath, throwOnMissingSubKey: false);
         }
 
         NotifyShellAssociationsChanged();
     }
 
-    public static void Unregister()
+    private static void RemoveExtensionFromOpenWith(string extension)
     {
-        var exePath = Environment.ProcessPath ??
-            Process.GetCurrentProcess().MainModule?.FileName ??
-            throw new InvalidOperationException("Cannot resolve LetMeSee.exe path.");
+        using var openWithProgIdsKey = Registry.CurrentUser.OpenSubKey($@"Software\Classes\{extension}\OpenWithProgids", true);
+        openWithProgIdsKey?.DeleteValue(ProgId, throwOnMissingValue: false);
+    }
 
-        var appExeName = Path.GetFileName(exePath);
-        var applicationKeyPath = $@"Software\Classes\Applications\{appExeName}";
-
-        foreach (var extension in Extensions)
+    private static string? ExtractExecutablePath(string command)
+    {
+        if (string.IsNullOrWhiteSpace(command))
         {
-            using var openWithProgIdsKey = Registry.CurrentUser.OpenSubKey($@"Software\Classes\{extension}\OpenWithProgids", true);
-            openWithProgIdsKey?.DeleteValue(ProgId, throwOnMissingValue: false);
+            return null;
         }
 
-        Registry.CurrentUser.DeleteSubKeyTree($@"Software\Classes\{ProgId}", throwOnMissingSubKey: false);
-        Registry.CurrentUser.DeleteSubKeyTree(applicationKeyPath, throwOnMissingSubKey: false);
-        Registry.CurrentUser.DeleteSubKeyTree(ContextMenuKeyPath, throwOnMissingSubKey: false);
-
-        using (var registeredApplicationsKey = Registry.CurrentUser.OpenSubKey(RegisteredApplicationsKeyPath, true))
+        if (command.StartsWith('"'))
         {
-            registeredApplicationsKey?.DeleteValue(AppName, throwOnMissingValue: false);
+            var closingQuoteIndex = command.IndexOf('"', 1);
+            return closingQuoteIndex > 1 ? command[1..closingQuoteIndex] : null;
         }
 
-        NotifyShellAssociationsChanged();
+        var separatorIndex = command.IndexOf(' ');
+        return separatorIndex > 0 ? command[..separatorIndex] : command;
     }
 
     private static void NotifyShellAssociationsChanged()

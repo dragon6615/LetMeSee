@@ -1,5 +1,6 @@
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 
@@ -34,14 +35,21 @@ public sealed class ImageLoader
             return cachedImage;
         }
 
-        var image = await Task.Run(() =>
+        var decoded = await Task.Run(() =>
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (!File.Exists(imagePath))
+            var fileInfo = new FileInfo(imagePath);
+            if (!fileInfo.Exists)
             {
                 throw new FileNotFoundException("Image file does not exist.", imagePath);
             }
+
+            // Stamp the cache entry with the file state observed *before* decoding. If the file
+            // is rewritten while we read it, the stamp no longer matches and the next lookup
+            // re-decodes instead of trusting stale pixels.
+            var fileLength = fileInfo.Length;
+            var lastWriteTimeUtc = fileInfo.LastWriteTimeUtc;
 
             using var stream = new FileStream(
                 imagePath,
@@ -62,11 +70,11 @@ public sealed class ImageLoader
             bitmap.EndInit();
             bitmap.Freeze();
 
-            return (BitmapSource)bitmap;
+            return (Image: (BitmapSource)bitmap, FileLength: fileLength, LastWriteTimeUtc: lastWriteTimeUtc);
         }, cancellationToken);
 
-        AddToCache(imagePath, image);
-        return image;
+        AddToCache(imagePath, decoded.Image, decoded.FileLength, decoded.LastWriteTimeUtc);
+        return decoded.Image;
     }
 
     public async Task PreloadAsync(IEnumerable<string> imagePaths, CancellationToken cancellationToken = default)
@@ -93,15 +101,29 @@ public sealed class ImageLoader
 
     private bool TryGetCachedImage(string imagePath, out BitmapSource image)
     {
+        CacheEntry? entry;
         lock (_cacheLock)
         {
-            if (!_cache.TryGetValue(imagePath, out var entry))
+            if (!_cache.TryGetValue(imagePath, out entry))
+            {
+                image = null!;
+                return false;
+            }
+        }
+
+        // Validating the entry touches the disk, so it happens outside the lock; the entry is
+        // re-checked afterwards in case another thread replaced it in the meantime.
+        var isCurrent = IsCacheEntryCurrent(imagePath, entry);
+
+        lock (_cacheLock)
+        {
+            if (!_cache.TryGetValue(imagePath, out var currentEntry) || !ReferenceEquals(currentEntry, entry))
             {
                 image = null!;
                 return false;
             }
 
-            if (!IsCacheEntryCurrent(imagePath, entry))
+            if (!isCurrent)
             {
                 RemoveCacheEntry(entry);
                 image = null!;
@@ -115,7 +137,7 @@ public sealed class ImageLoader
         }
     }
 
-    private void AddToCache(string imagePath, BitmapSource image)
+    private void AddToCache(string imagePath, BitmapSource image, long fileLength, DateTime lastWriteTimeUtc)
     {
         if (_maxCacheBytes == 0)
         {
@@ -128,13 +150,12 @@ public sealed class ImageLoader
             return;
         }
 
-        var fileInfo = new FileInfo(imagePath);
         var node = new LinkedListNode<string>(imagePath);
         var entry = new CacheEntry(
             image,
             imageBytes,
-            fileInfo.Length,
-            fileInfo.LastWriteTimeUtc,
+            fileLength,
+            lastWriteTimeUtc,
             node);
 
         lock (_cacheLock)
@@ -168,10 +189,17 @@ public sealed class ImageLoader
 
     private static bool IsCacheEntryCurrent(string imagePath, CacheEntry entry)
     {
-        var fileInfo = new FileInfo(imagePath);
-        return fileInfo.Exists &&
-            fileInfo.Length == entry.FileLength &&
-            fileInfo.LastWriteTimeUtc == entry.LastWriteTimeUtc;
+        try
+        {
+            var fileInfo = new FileInfo(imagePath);
+            return fileInfo.Exists &&
+                fileInfo.Length == entry.FileLength &&
+                fileInfo.LastWriteTimeUtc == entry.LastWriteTimeUtc;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SecurityException)
+        {
+            return false;
+        }
     }
 
     private static long EstimateBitmapBytes(BitmapSource image)

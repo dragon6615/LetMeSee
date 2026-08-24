@@ -1,10 +1,13 @@
 using LetMeSee.Services;
 using Microsoft.Win32;
+using System.ComponentModel;
+using System.Diagnostics;
 using Microsoft.VisualBasic.FileIO;
 using System.Collections.Specialized;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -26,43 +29,25 @@ public partial class MainWindow : Window
     private const double KeyboardPanStep = 80;
     private const double HiddenTitleBarResizeBorderThickness = 6;
     private const int ImageCachePreloadRadius = 2;
+    private const long MaxAnimationBytes = 384L * 1024 * 1024;
     private const int GifDisposalDoNotDispose = 1;
     private const int GifDisposalRestoreBackground = 2;
     private const int GifDisposalRestorePrevious = 3;
-
-    private static readonly HashSet<string> SupportedImageExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".jpg",
-        ".jpeg",
-        ".png",
-        ".bmp",
-        ".gif",
-        ".webp",
-        ".tif",
-        ".tiff",
-        // RAW formats — requires Windows Raw Image Extension (built-in on Windows 11)
-        ".cr2",  // Canon
-        ".cr3",  // Canon (newer)
-        ".nef",  // Nikon
-        ".arw",  // Sony
-        ".raf",  // Fujifilm
-        ".orf",  // Olympus
-        ".rw2",  // Panasonic
-        ".dng",  // Adobe DNG
-        // HEIF — requires HEVC/HEIF extensions (built-in on Windows 11)
-        ".heic",
-        ".heif",
-    };
 
     private readonly AppSettings _settings = AppSettings.Load();
     private readonly ImageLoader _imageLoader = new();
     private readonly LogicalPathComparer _pathComparer = new();
     private bool _hasLoadedFirstImage;
     private List<string> _folderImages = [];
+    private string? _folderImagesDirectory;
+    private FileSystemWatcher? _folderWatcher;
+    private volatile bool _areFolderImagesStale = true;
     private BitmapSource? _currentImage;
     private AnimatedImage? _currentAnimation;
     private ImageSourceDetails? _currentSourceImageDetails;
     private string? _currentImagePath;
+    private string? _requestedImagePath;
+    private CancellationTokenSource? _imageLoadCancellation;
     private int _currentImageIndex = -1;
     private int _imageLoadVersion;
     private int _currentAnimationFrameIndex;
@@ -72,11 +57,18 @@ public partial class MainWindow : Window
     private double _zoomScale = 1;
     private double _imageOffsetX;
     private double _imageOffsetY;
+    private long? _currentFileSizeBytes;
+    private int _completedAnimationLoops;
     private ResizeMode _previousResizeMode;
-    private Visibility _previousMenuVisibility;
+    private bool _isMenuHiddenByUser;
+    private bool _isAltTapCandidate;
     private Rect _previousWindowBounds;
     private bool _previousTopmost;
     private Point _dragStartPoint;
+    private Point _panStartPoint;
+    private double _panStartOffsetX;
+    private double _panStartOffsetY;
+    private bool _isPanningImage;
     private bool _isDragPending;
     private bool _isDeletingCurrentImage;
     private bool _isFitMode = true;
@@ -88,12 +80,27 @@ public partial class MainWindow : Window
     public MainWindow(string? imagePath)
     {
         InitializeComponent();
+
+        // The menu bar belongs to the windowed layout; collapse it up front when the app is
+        // about to go fullscreen so it never flashes on screen during startup.
+        if (_settings.StartFullScreen && !string.IsNullOrWhiteSpace(imagePath))
+        {
+            MainMenu.Visibility = Visibility.Collapsed;
+        }
+
         Loaded += async (_, _) =>
         {
-            UpdateFileAssociationsMenuItem();
             Viewport.Focus();
             await OpenInitialImageAsync(imagePath);
         };
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        StopWatchingFolder();
+        StopImageAnimation();
+        _imageLoadCancellation?.Cancel();
+        base.OnClosed(e);
     }
 
     private async Task OpenInitialImageAsync(string? imagePath)
@@ -111,8 +118,8 @@ public partial class MainWindow : Window
     {
         var dialog = new OpenFileDialog
         {
-            Title = "Open image",
-            Filter = "Images|*.jpg;*.jpeg;*.png;*.bmp;*.gif;*.webp;*.tif;*.tiff;*.cr2;*.cr3;*.nef;*.arw;*.raf;*.orf;*.rw2;*.dng;*.heic;*.heif|All files|*.*"
+            Title = "開啟圖片",
+            Filter = SupportedImageFormats.OpenFileDialogFilter
         };
 
         if (dialog.ShowDialog(this) == true)
@@ -128,27 +135,44 @@ public partial class MainWindow : Window
         bool showLoadingMessage = true,
         bool resizeWindow = true)
     {
-        imagePath = Path.GetFullPath(imagePath);
+        string fullImagePath;
+        try
+        {
+            fullImagePath = Path.GetFullPath(imagePath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException or SecurityException)
+        {
+            _imageLoadVersion++;
+            ShowImageLoadFailure(imagePath, ex);
+            return;
+        }
+
         var loadVersion = ++_imageLoadVersion;
+        _requestedImagePath = fullImagePath;
+        _imageLoadCancellation?.Cancel();
+        _imageLoadCancellation = new CancellationTokenSource();
+        var cancellationToken = _imageLoadCancellation.Token;
         StopImageAnimation();
         _displayRotationDegrees = 0;
 
         if (refreshFolderImages)
         {
-            RefreshFolderImages(imagePath);
+            RefreshFolderImages(fullImagePath);
         }
 
         if (showLoadingMessage && _currentImage is null)
         {
-            MessageText.Text = "Loading...";
+            MessageText.Text = "載入中...";
         }
 
-        UpdateWindowTitle(imagePath, image: null);
+        UpdateWindowTitle(fullImagePath, image: null);
+
+        var loadStopwatch = Stopwatch.StartNew();
 
         try
         {
-            var image = await _imageLoader.LoadAsync(imagePath);
-            var animation = await TryLoadAnimatedGifAsync(imagePath);
+            var image = await _imageLoader.LoadAsync(fullImagePath, cancellationToken);
+            var animation = await TryLoadAnimatedGifAsync(fullImagePath, cancellationToken);
             if (loadVersion != _imageLoadVersion)
             {
                 return;
@@ -157,11 +181,12 @@ public partial class MainWindow : Window
             _currentAnimation = animation;
             _currentAnimationFrameIndex = 0;
             _currentImage = animation?.Frames[0].Image ?? image;
-            _currentImagePath = imagePath;
-            _currentSourceImageDetails = ReadImageSourceDetails(imagePath);
+            _currentImagePath = fullImagePath;
+            _currentFileSizeBytes = TryGetFileSize(fullImagePath);
+            _currentSourceImageDetails = ReadImageSourceDetails(fullImagePath);
             SetImageDisplaySize(_currentImage);
             ImageView.Source = _currentImage;
-            UpdateWindowTitle(imagePath, _currentImage);
+            UpdateWindowTitle(fullImagePath, _currentImage);
             UpdateImageInfoOverlay();
             MessageText.Text = "";
 
@@ -179,29 +204,47 @@ public partial class MainWindow : Window
 
             FitToWindow();
             StartImageAnimation();
-            QueueNearbyImagesForCache();
+            QueueNearbyImagesForCache(cancellationToken);
+
+            DiagnosticLog.Write(
+                $"載入 {Path.GetFileName(fullImagePath)}：{_currentImage.PixelWidth}x{_currentImage.PixelHeight}，" +
+                $"{(animation is null ? "靜態" : $"動畫 {animation.Frames.Count} 幀 / 循環 {animation.RepeatCount}")}，" +
+                $"耗時 {loadStopwatch.ElapsedMilliseconds} ms，資料夾第 {_currentImageIndex + 1}/{_folderImages.Count} 張");
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or System.Runtime.InteropServices.COMException)
+        catch (OperationCanceledException)
+        {
+            // A newer load superseded this one and owns the visible state.
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or COMException or ArgumentException or OutOfMemoryException)
         {
             if (loadVersion != _imageLoadVersion)
             {
                 return;
             }
 
-            ImageView.Source = null;
-            _currentImage = null;
-            _currentAnimation = null;
-            _currentSourceImageDetails = null;
-            _currentImagePath = null;
-            _currentAnimationFrameIndex = 0;
-            _displayRotationDegrees = 0;
-            _imageWidth = 0;
-            _imageHeight = 0;
-            ResetImageOffset();
-            ResetMinimumWindowSize();
-            UpdateImageInfoOverlay();
-            MessageText.Text = $"Cannot open image:{Environment.NewLine}{imagePath}{Environment.NewLine}{ex.Message}";
+            ShowImageLoadFailure(fullImagePath, ex);
         }
+    }
+
+    private void ShowImageLoadFailure(string imagePath, Exception error)
+    {
+        StopImageAnimation();
+        ImageView.Source = null;
+        _currentImage = null;
+        _currentAnimation = null;
+        _currentSourceImageDetails = null;
+        _currentImagePath = null;
+        _requestedImagePath = null;
+        _currentFileSizeBytes = null;
+        _currentAnimationFrameIndex = 0;
+        _displayRotationDegrees = 0;
+        _imageWidth = 0;
+        _imageHeight = 0;
+        ResetImageOffset();
+        ResetMinimumWindowSize();
+        UpdateImageInfoOverlay();
+        MessageText.Text = $"無法開啟圖片：{Environment.NewLine}{imagePath}{Environment.NewLine}{error.Message}";
+        DiagnosticLog.Write($"載入失敗 {imagePath}", error);
     }
 
     private void RefreshFolderImages(string imagePath)
@@ -209,40 +252,127 @@ public partial class MainWindow : Window
         var directory = Path.GetDirectoryName(imagePath);
         if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
         {
+            StopWatchingFolder();
             _folderImages = [];
+            _folderImagesDirectory = null;
             _currentImageIndex = -1;
             return;
         }
 
-        _folderImages = EnumerateFolderImages(imagePath);
+        // Enumerating on every navigation is a synchronous disk hit on the UI thread, which is
+        // painful on large or network folders. Reuse the listing and let a watcher invalidate it.
+        if (_areFolderImagesStale ||
+            !string.Equals(directory, _folderImagesDirectory, StringComparison.OrdinalIgnoreCase))
+        {
+            _folderImages = EnumerateFolderImages(directory);
+            _folderImagesDirectory = directory;
+            _areFolderImagesStale = false;
+            WatchFolder(directory);
+            DiagnosticLog.Write($"列舉資料夾 {directory}：{_folderImages.Count} 張圖片");
+        }
+
         _currentImageIndex = _folderImages.FindIndex(path => string.Equals(path, imagePath, StringComparison.OrdinalIgnoreCase));
     }
 
-    private List<string> EnumerateFolderImages(string imagePath)
+    private List<string> EnumerateFolderImages(string directory)
     {
-        var directory = Path.GetDirectoryName(imagePath);
         if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
         {
             return [];
         }
 
-        return Directory
-            .EnumerateFiles(directory)
-            .Where(IsSupportedImageFile)
-            .OrderBy(path => path, _pathComparer)
-            .ToList();
+        try
+        {
+            return Directory
+                .EnumerateFiles(directory)
+                .Where(IsSupportedImageFile)
+                .OrderBy(path => path, _pathComparer)
+                .ToList();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SecurityException)
+        {
+            return [];
+        }
+    }
+
+    private void WatchFolder(string directory)
+    {
+        if (_folderWatcher is not null &&
+            string.Equals(_folderWatcher.Path, directory, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        StopWatchingFolder();
+
+        try
+        {
+            var watcher = new FileSystemWatcher(directory)
+            {
+                NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName
+            };
+
+            watcher.Created += OnWatchedFolderChanged;
+            watcher.Deleted += OnWatchedFolderChanged;
+            watcher.Renamed += OnWatchedFolderChanged;
+            watcher.Error += OnWatchedFolderError;
+            watcher.EnableRaisingEvents = true;
+            _folderWatcher = watcher;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or SecurityException)
+        {
+            // No watcher available (for example on some network shares): fall back to
+            // re-enumerating the folder on every navigation.
+            _areFolderImagesStale = true;
+        }
+    }
+
+    private void StopWatchingFolder()
+    {
+        if (_folderWatcher is null)
+        {
+            return;
+        }
+
+        _folderWatcher.EnableRaisingEvents = false;
+        _folderWatcher.Created -= OnWatchedFolderChanged;
+        _folderWatcher.Deleted -= OnWatchedFolderChanged;
+        _folderWatcher.Renamed -= OnWatchedFolderChanged;
+        _folderWatcher.Error -= OnWatchedFolderError;
+        _folderWatcher.Dispose();
+        _folderWatcher = null;
+    }
+
+    // Watcher callbacks arrive on a background thread; they only flip a flag.
+    private void OnWatchedFolderChanged(object sender, FileSystemEventArgs e)
+    {
+        var affectsImageListing = IsSupportedImageFile(e.Name ?? e.FullPath) ||
+            (e is RenamedEventArgs renamed && IsSupportedImageFile(renamed.OldName ?? renamed.OldFullPath));
+
+        if (affectsImageListing)
+        {
+            _areFolderImagesStale = true;
+        }
+    }
+
+    private void OnWatchedFolderError(object sender, ErrorEventArgs e)
+    {
+        _areFolderImagesStale = true;
     }
 
     private static bool IsSupportedImageFile(string path)
     {
-        return SupportedImageExtensions.Contains(Path.GetExtension(path));
+        return SupportedImageFormats.IsSupportedFile(path);
     }
 
     private async Task NavigateRelativeAsync(int delta)
     {
-        if (_currentImagePath is not null)
+        // Navigate from the most recently requested image, not the last one that finished
+        // loading; otherwise fast wheel or arrow-key input keeps restarting from the same file.
+        var navigationOrigin = _requestedImagePath ?? _currentImagePath;
+        if (navigationOrigin is not null)
         {
-            RefreshFolderImages(_currentImagePath);
+            RefreshFolderImages(navigationOrigin);
         }
 
         if (_folderImages.Count == 0 || _currentImageIndex < 0)
@@ -268,7 +398,7 @@ public partial class MainWindow : Window
             showLoadingMessage: false);
     }
 
-    private void QueueNearbyImagesForCache()
+    private void QueueNearbyImagesForCache(CancellationToken cancellationToken)
     {
         if (_folderImages.Count == 0 || _currentImageIndex < 0)
         {
@@ -293,17 +423,21 @@ public partial class MainWindow : Window
 
         if (imagePaths.Count > 0)
         {
-            _ = PreloadImagesAsync(imagePaths);
+            _ = PreloadImagesAsync(imagePaths, cancellationToken);
         }
     }
 
-    private async Task PreloadImagesAsync(IReadOnlyCollection<string> imagePaths)
+    private async Task PreloadImagesAsync(IReadOnlyCollection<string> imagePaths, CancellationToken cancellationToken)
     {
         try
         {
-            await _imageLoader.PreloadAsync(imagePaths);
+            await _imageLoader.PreloadAsync(imagePaths, cancellationToken);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or System.Runtime.InteropServices.COMException)
+        catch (OperationCanceledException)
+        {
+            // Superseded by a newer navigation; its own preload takes over.
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or COMException)
         {
             // Cache preloading is best-effort; visible image loading reports its own failures.
         }
@@ -311,6 +445,10 @@ public partial class MainWindow : Window
 
     private void Window_KeyDown(object sender, KeyEventArgs e)
     {
+        // A tap of Alt on its own reveals the menu, the way Explorer does. Alt combined with
+        // anything else is a normal shortcut and must not count as a tap.
+        _isAltTapCandidate = IsAltKey(e) && (_isAltTapCandidate || !e.IsRepeat);
+
         switch (e.Key)
         {
             case Key.Add:
@@ -424,22 +562,43 @@ public partial class MainWindow : Window
                 e.Handled = true;
                 break;
             case Key.Escape:
-                if (_isFullScreen)
-                {
-                    Close();
-                }
-                else if (MainMenu.Visibility == Visibility.Visible)
-                {
-                    MainMenu.Visibility = Visibility.Collapsed;
-                }
-                else
-                {
-                    Close();
-                }
-
+                // The menu bar is a permanent part of the windowed layout now, so Esc always
+                // closes instead of collapsing it first.
+                Close();
                 e.Handled = true;
                 break;
         }
+    }
+
+    private void Window_KeyUp(object sender, KeyEventArgs e)
+    {
+        if (!IsAltKey(e) || !_isAltTapCandidate)
+        {
+            return;
+        }
+
+        _isAltTapCandidate = false;
+
+        if (!_isFullScreen && MainMenu.Visibility == Visibility.Visible)
+        {
+            // Already part of the windowed layout: let WPF do its own Alt handling.
+            return;
+        }
+
+        ToggleMainMenuVisibility();
+
+        if (MainMenu.Visibility == Visibility.Visible && MainMenu.Items.Count > 0 &&
+            MainMenu.Items[0] is MenuItem firstMenuItem)
+        {
+            firstMenuItem.Focus();
+        }
+
+        e.Handled = true;
+    }
+
+    private static bool IsAltKey(KeyEventArgs e)
+    {
+        return e.Key == Key.System && e.SystemKey is Key.LeftAlt or Key.RightAlt;
     }
 
     private void CopyCurrentImageFileToClipboard()
@@ -469,7 +628,7 @@ public partial class MainWindow : Window
                 $"複製圖片檔案失敗：{Environment.NewLine}{ex.Message}",
                 "LetMeSee",
                 MessageBoxButton.OK,
-            MessageBoxImage.Error);
+                MessageBoxImage.Error);
         }
     }
 
@@ -482,8 +641,8 @@ public partial class MainWindow : Window
 
         var dialog = new SaveFileDialog
         {
-            Title = "Save image as",
-            Filter = "PNG Image|*.png|JPEG Image|*.jpg;*.jpeg|Bitmap Image|*.bmp|GIF Image|*.gif|TIFF Image|*.tif;*.tiff",
+            Title = "另存圖片",
+            Filter = "PNG 圖片|*.png|JPEG 圖片|*.jpg;*.jpeg|BMP 圖片|*.bmp|GIF 圖片|*.gif|TIFF 圖片|*.tif;*.tiff",
             FileName = GetDefaultSaveAsFileName(),
             DefaultExt = ".png",
             AddExtension = false,
@@ -514,6 +673,7 @@ public partial class MainWindow : Window
         try
         {
             SaveBitmapSource(_currentImage, filePath);
+            DiagnosticLog.Write($"另存新檔：{filePath}");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or InvalidOperationException)
         {
@@ -537,12 +697,19 @@ public partial class MainWindow : Window
 
     private static string GetSaveAsFilePath(SaveFileDialog dialog)
     {
-        if (!string.IsNullOrWhiteSpace(Path.GetExtension(dialog.FileName)))
+        // The encoder is chosen from the extension, so an extension we cannot encode
+        // (".foo") would silently produce a PNG under a misleading name.
+        if (IsSupportedSaveExtension(Path.GetExtension(dialog.FileName)))
         {
             return dialog.FileName;
         }
 
-        return Path.ChangeExtension(dialog.FileName, GetDefaultExtensionForFilterIndex(dialog.FilterIndex));
+        return dialog.FileName + GetDefaultExtensionForFilterIndex(dialog.FilterIndex);
+    }
+
+    private static bool IsSupportedSaveExtension(string extension)
+    {
+        return extension.ToLowerInvariant() is ".png" or ".jpg" or ".jpeg" or ".bmp" or ".gif" or ".tif" or ".tiff";
     }
 
     private static string GetDefaultExtensionForFilterIndex(int filterIndex)
@@ -602,12 +769,27 @@ public partial class MainWindow : Window
         try
         {
             var imagePath = _currentImagePath;
-            var folderImagesBeforeDelete = EnumerateFolderImages(imagePath);
+            var confirmation = MessageBox.Show(
+                this,
+                $"要將這個檔案移到資源回收桶嗎？{Environment.NewLine}{imagePath}",
+                "LetMeSee",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning,
+                MessageBoxResult.No);
+
+            if (confirmation != MessageBoxResult.Yes)
+            {
+                return;
+            }
+
+            var folderImagesBeforeDelete = EnumerateFolderImages(Path.GetDirectoryName(imagePath) ?? "");
             var deletedIndex = folderImagesBeforeDelete.FindIndex(path => string.Equals(path, imagePath, StringComparison.OrdinalIgnoreCase));
 
             if (File.Exists(imagePath))
             {
                 FileSystem.DeleteFile(imagePath, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin);
+                _areFolderImagesStale = true;
+                DiagnosticLog.Write($"刪除到資源回收桶：{imagePath}");
             }
 
             var replacementImagePath = GetReplacementImagePathAfterDelete(
@@ -671,6 +853,7 @@ public partial class MainWindow : Window
     private void ClearCurrentImageState()
     {
         _imageLoadVersion++;
+        _imageLoadCancellation?.Cancel();
         StopImageAnimation();
         ImageView.Source = null;
         ImageView.Width = 0;
@@ -679,8 +862,12 @@ public partial class MainWindow : Window
         _currentAnimation = null;
         _currentSourceImageDetails = null;
         _currentImagePath = null;
+        _requestedImagePath = null;
+        _currentFileSizeBytes = null;
         _currentImageIndex = -1;
         _folderImages = [];
+        _folderImagesDirectory = null;
+        StopWatchingFolder();
         _currentAnimationFrameIndex = 0;
         _displayRotationDegrees = 0;
         _imageWidth = 0;
@@ -753,35 +940,30 @@ public partial class MainWindow : Window
 
     private void FileAssociationsMenuItem_Click(object sender, RoutedEventArgs e)
     {
-        var shouldRegister = FileAssociationsMenuItem.IsChecked;
+        var dialog = new FileAssociationsWindow
+        {
+            Owner = this
+        };
 
+        dialog.ShowDialog();
+    }
+
+    private void OpenDiagnosticLogMenuItem_Click(object sender, RoutedEventArgs e)
+    {
         try
         {
-            if (shouldRegister)
+            if (!File.Exists(DiagnosticLog.FilePath))
             {
-                FileAssociationRegistrar.Register();
-            }
-            else
-            {
-                FileAssociationRegistrar.Unregister();
+                DiagnosticLog.Write("使用者開啟診斷紀錄。");
             }
 
-            UpdateFileAssociationsMenuItem();
-            MessageBox.Show(
-                this,
-                shouldRegister
-                    ? "檔案關聯已完成。若右鍵選單沒有立刻更新，請重新開啟檔案總管或登出再登入。"
-                    : "檔案關聯已取消。若右鍵選單沒有立刻更新，請重新開啟檔案總管或登出再登入。",
-                "LetMeSee",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
+            Process.Start(new ProcessStartInfo(DiagnosticLog.FilePath) { UseShellExecute = true });
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Win32Exception or InvalidOperationException)
         {
-            UpdateFileAssociationsMenuItem();
             MessageBox.Show(
                 this,
-                $"檔案關聯更新失敗：{Environment.NewLine}{ex.Message}",
+                $"無法開啟診斷紀錄：{Environment.NewLine}{DiagnosticLog.FilePath}{Environment.NewLine}{ex.Message}",
                 "LetMeSee",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
@@ -790,7 +972,7 @@ public partial class MainWindow : Window
 
     private void AboutMenuItem_Click(object sender, RoutedEventArgs e)
     {
-        var supportedFormats = string.Join(", ", SupportedImageExtensions.Order(StringComparer.OrdinalIgnoreCase));
+        var supportedFormats = string.Join(", ", SupportedImageFormats.Extensions);
         var message = string.Join(
             Environment.NewLine,
             $"LetMeSee {GetApplicationVersion()}",
@@ -798,14 +980,17 @@ public partial class MainWindow : Window
             "功能：",
             "開啟圖片後自動全螢幕顯示。",
             "同資料夾圖片可用方向鍵或 PageUp/PageDown 切換。",
-            "支援滑鼠滾輪縮放，圖片超出可視範圍時可用方向鍵平移。",
+            "支援滑鼠滾輪縮放，按 1 / 2 / 3 可切換 1x / 2x / 3x 顯示。",
+            "圖片超出可視範圍時，可用方向鍵或直接拖曳平移。",
             "支援 GIF 動畫播放。",
             "F 或 Enter 可切換全螢幕。",
             "按 V 可在左下角顯示或隱藏目前圖片詳細資訊。",
             "右鍵選單可將目前圖片另存新檔。",
             "右鍵選單可將目前圖片左轉或右轉 90 度。",
-            "Ctrl+C 可複製目前圖片檔案，Delete 可刪除目前圖片並切換下一張。",
+            "Ctrl+C 可複製目前圖片檔案，Delete 可將目前圖片移到資源回收桶並切換下一張。",
             "視窗模式下雙擊圖片可隱藏或顯示標題列。",
+            "視窗模式會顯示功能表；全螢幕時按 Alt 或雙擊畫面可叫出功能表。",
+            "「說明 > 開啟診斷紀錄」可以查看載入與檔案關聯的紀錄。",
             "可切換目前使用者的 Open with 與圖片右鍵選單關聯。",
             "",
             "支援格式：",
@@ -814,21 +999,9 @@ public partial class MainWindow : Window
         MessageBox.Show(
             this,
             message,
-            "About LetMeSee",
+            "關於 LetMeSee",
             MessageBoxButton.OK,
             MessageBoxImage.Information);
-    }
-
-    private void UpdateFileAssociationsMenuItem()
-    {
-        try
-        {
-            FileAssociationsMenuItem.IsChecked = FileAssociationRegistrar.IsRegistered();
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
-        {
-            FileAssociationsMenuItem.IsChecked = false;
-        }
     }
 
     private static string GetApplicationVersion()
@@ -904,6 +1077,20 @@ public partial class MainWindow : Window
             return;
         }
 
+        // An image larger than the viewport is panned by dragging; otherwise there is nothing
+        // to pan and the drag keeps moving the window.
+        if (GetImageOverflow(out _, out _))
+        {
+            _panStartPoint = e.GetPosition(Viewport);
+            _panStartOffsetX = _imageOffsetX;
+            _panStartOffsetY = _imageOffsetY;
+            _isPanningImage = true;
+            Viewport.Cursor = Cursors.SizeAll;
+            Viewport.CaptureMouse();
+            e.Handled = true;
+            return;
+        }
+
         if (_isFullScreen || WindowState == WindowState.Maximized)
         {
             return;
@@ -917,6 +1104,22 @@ public partial class MainWindow : Window
 
     private void Viewport_MouseMove(object sender, MouseEventArgs e)
     {
+        if (_isPanningImage)
+        {
+            if (e.LeftButton != MouseButtonState.Pressed)
+            {
+                EndImagePan();
+                return;
+            }
+
+            var panPosition = e.GetPosition(Viewport);
+            _imageOffsetX = _panStartOffsetX + (panPosition.X - _panStartPoint.X);
+            _imageOffsetY = _panStartOffsetY + (panPosition.Y - _panStartPoint.Y);
+            ClampImageOffset();
+            e.Handled = true;
+            return;
+        }
+
         if (!_isDragPending || e.LeftButton != MouseButtonState.Pressed)
         {
             return;
@@ -946,6 +1149,13 @@ public partial class MainWindow : Window
 
     private void Viewport_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
+        if (_isPanningImage)
+        {
+            EndImagePan();
+            e.Handled = true;
+            return;
+        }
+
         if (!_isDragPending)
         {
             return;
@@ -956,16 +1166,33 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
+    private void EndImagePan()
+    {
+        _isPanningImage = false;
+        Viewport.Cursor = null;
+        Viewport.ReleaseMouseCapture();
+    }
+
     private void ToggleMainMenuVisibility()
     {
-        if (MainMenu.Visibility != Visibility.Visible)
-        {
-            UpdateFileAssociationsMenuItem();
-        }
+        var shouldShow = MainMenu.Visibility != Visibility.Visible;
+        MainMenu.Visibility = shouldShow ? Visibility.Visible : Visibility.Collapsed;
 
-        MainMenu.Visibility = MainMenu.Visibility == Visibility.Visible
-            ? Visibility.Collapsed
-            : Visibility.Visible;
+        // Peeking at the menu in fullscreen is temporary; only a windowed change is remembered
+        // as the layout the user wants to come back to.
+        if (!_isFullScreen)
+        {
+            _isMenuHiddenByUser = !shouldShow;
+        }
+    }
+
+    /// <summary>
+    /// The menu bar is part of the windowed layout: restored on leaving fullscreen unless the
+    /// user hid it themselves.
+    /// </summary>
+    private void ApplyMainMenuVisibility()
+    {
+        MainMenu.Visibility = _isMenuHiddenByUser ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private void Viewport_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -1040,6 +1267,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        _completedAnimationLoops = 0;
         _animationTimer = new DispatcherTimer(DispatcherPriority.Render)
         {
             Interval = _currentAnimation.Frames[0].Delay
@@ -1048,17 +1276,24 @@ public partial class MainWindow : Window
         _animationTimer.Start();
     }
 
-    private void StopImageAnimation()
+    private void StopAnimationTimer()
     {
-        if (_animationTimer is not null)
+        if (_animationTimer is null)
         {
-            _animationTimer.Stop();
-            _animationTimer.Tick -= AnimationTimer_Tick;
-            _animationTimer = null;
+            return;
         }
 
+        _animationTimer.Stop();
+        _animationTimer.Tick -= AnimationTimer_Tick;
+        _animationTimer = null;
+    }
+
+    private void StopImageAnimation()
+    {
+        StopAnimationTimer();
         _currentAnimation = null;
         _currentAnimationFrameIndex = 0;
+        _completedAnimationLoops = 0;
     }
 
     private void AnimationTimer_Tick(object? sender, EventArgs e)
@@ -1069,8 +1304,23 @@ public partial class MainWindow : Window
             return;
         }
 
-        _currentAnimationFrameIndex = (_currentAnimationFrameIndex + 1) % _currentAnimation.Frames.Count;
-        ShowAnimationFrame(_currentAnimationFrameIndex, updateLayoutForSizeChange: true);
+        var nextFrameIndex = _currentAnimationFrameIndex + 1;
+        if (nextFrameIndex >= _currentAnimation.Frames.Count)
+        {
+            _completedAnimationLoops++;
+
+            // RepeatCount 0 means "loop forever" in the GIF application extension.
+            if (_currentAnimation.RepeatCount > 0 && _completedAnimationLoops >= _currentAnimation.RepeatCount)
+            {
+                StopAnimationTimer();
+                return;
+            }
+
+            nextFrameIndex = 0;
+        }
+
+        _currentAnimationFrameIndex = nextFrameIndex;
+        ShowAnimationFrame(_currentAnimationFrameIndex, isTimerTick: true);
 
         if (_animationTimer is not null)
         {
@@ -1078,7 +1328,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ShowAnimationFrame(int frameIndex, bool updateLayoutForSizeChange = false)
+    private void ShowAnimationFrame(int frameIndex, bool isTimerTick = false)
     {
         if (_currentAnimation is null || frameIndex < 0 || frameIndex >= _currentAnimation.Frames.Count)
         {
@@ -1096,7 +1346,7 @@ public partial class MainWindow : Window
         ImageView.Source = frame;
         SetImageDisplaySize(frame);
 
-        if (updateLayoutForSizeChange && sizeChanged)
+        if (isTimerTick && sizeChanged)
         {
             if (_isFitMode)
             {
@@ -1108,8 +1358,13 @@ public partial class MainWindow : Window
             }
         }
 
-        UpdateCurrentImageTitle();
-        UpdateImageInfoOverlay();
+        // Title and overlay only depend on frame dimensions, so a plain tick has nothing
+        // to redo; rebuilding them every frame would cost a text layout per animation frame.
+        if (!isTimerTick || sizeChanged)
+        {
+            UpdateCurrentImageTitle();
+            UpdateImageInfoOverlay();
+        }
     }
 
     private BitmapSource ApplyDisplayRotation(BitmapSource image)
@@ -1172,10 +1427,9 @@ public partial class MainWindow : Window
             lines.Add($"檔案：{Path.GetFileName(_currentImagePath)}");
             lines.Add($"路徑：{_currentImagePath}");
 
-            var fileInfo = new FileInfo(_currentImagePath);
-            if (fileInfo.Exists)
+            if (_currentFileSizeBytes is { } fileSizeBytes)
             {
-                lines.Add($"檔案大小：{FormatByteSize(fileInfo.Length)}");
+                lines.Add($"檔案大小：{FormatByteSize(fileSizeBytes)}");
             }
         }
 
@@ -1199,25 +1453,59 @@ public partial class MainWindow : Window
         return string.Join(Environment.NewLine, lines);
     }
 
-    private static Task<AnimatedImage?> TryLoadAnimatedGifAsync(string imagePath)
+    private static async Task<AnimatedImage?> TryLoadAnimatedGifAsync(string imagePath, CancellationToken cancellationToken)
     {
         if (!string.Equals(Path.GetExtension(imagePath), ".gif", StringComparison.OrdinalIgnoreCase))
         {
-            return Task.FromResult<AnimatedImage?>(null);
+            return null;
         }
 
         try
         {
-            return Task.FromResult(LoadAnimatedGif(imagePath));
+            return await RunOnBackgroundRenderThreadAsync(() => LoadAnimatedGif(imagePath, cancellationToken));
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or InvalidOperationException or COMException or ArgumentException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or InvalidOperationException or COMException or ArgumentException or OutOfMemoryException)
         {
-            return Task.FromResult<AnimatedImage?>(null);
+            return null;
         }
     }
 
-    private static AnimatedImage? LoadAnimatedGif(string imagePath)
+    /// <summary>
+    /// Runs work that needs a dispatcher thread, such as <see cref="RenderTargetBitmap"/> composition,
+    /// off the UI thread so that decoding a long animation does not freeze the window.
+    /// </summary>
+    private static Task<T> RunOnBackgroundRenderThreadAsync<T>(Func<T> render)
     {
+        var completionSource = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                completionSource.SetResult(render());
+            }
+            catch (Exception ex)
+            {
+                completionSource.SetException(ex);
+            }
+            finally
+            {
+                Dispatcher.CurrentDispatcher.InvokeShutdown();
+            }
+        })
+        {
+            IsBackground = true
+        };
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+
+        return completionSource.Task;
+    }
+
+    private static AnimatedImage? LoadAnimatedGif(string imagePath, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
         using var stream = new FileStream(
             imagePath,
             FileMode.Open,
@@ -1240,11 +1528,21 @@ public partial class MainWindow : Window
         var canvasHeight = GetGifLogicalScreenDimension(decoder.Metadata, "/logscrdesc/Height")
             ?? Math.Max(1, frameMetadata.Max(frame => frame.Top + frame.Height));
 
+        // Every frame is composed to full canvas size in Pbgra32, so a long animation can be far
+        // larger than its file. Fall back to the static first frame instead of exhausting memory.
+        var estimatedFrameBytes = (long)canvasWidth * canvasHeight * 4 * decoder.Frames.Count;
+        if (estimatedFrameBytes > MaxAnimationBytes)
+        {
+            return null;
+        }
+
         var frames = new List<AnimatedImageFrame>(decoder.Frames.Count);
         BitmapSource? canvas = null;
 
         for (var i = 0; i < decoder.Frames.Count; i++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             var rawFrame = decoder.Frames[i];
             var metadata = frameMetadata[i];
             var previousCanvas = metadata.DisposalMethod == GifDisposalRestorePrevious
@@ -1262,7 +1560,42 @@ public partial class MainWindow : Window
             };
         }
 
-        return new AnimatedImage(frames);
+        return new AnimatedImage(frames, GetGifRepeatCount(decoder.Metadata as BitmapMetadata));
+    }
+
+    /// <summary>
+    /// Reads the NETSCAPE2.0 application extension loop count. Returns 0 when the animation
+    /// should loop forever, which is also the fallback when no loop count is present.
+    /// </summary>
+    private static int GetGifRepeatCount(BitmapMetadata? metadata)
+    {
+        try
+        {
+            if (metadata is null ||
+                !metadata.ContainsQuery("/appext/Application") ||
+                metadata.GetQuery("/appext/Application") is not byte[] application)
+            {
+                return 0;
+            }
+
+            var applicationName = System.Text.Encoding.ASCII.GetString(application).TrimEnd('\0');
+            if (!applicationName.StartsWith("NETSCAPE", StringComparison.Ordinal))
+            {
+                return 0;
+            }
+
+            if (metadata.ContainsQuery("/appext/Data") &&
+                metadata.GetQuery("/appext/Data") is byte[] { Length: >= 4 } data)
+            {
+                // Sub-block layout: [block size][sub-block id][loop count low][loop count high]
+                return BitConverter.ToUInt16(data, 2);
+            }
+        }
+        catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException or ArgumentException)
+        {
+        }
+
+        return 0;
     }
 
     private static GifFrameMetadata GetGifFrameMetadata(BitmapFrame frame)
@@ -1485,6 +1818,19 @@ public partial class MainWindow : Window
         }
     }
 
+    private static long? TryGetFileSize(string imagePath)
+    {
+        try
+        {
+            var fileInfo = new FileInfo(imagePath);
+            return fileInfo.Exists ? fileInfo.Length : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SecurityException)
+        {
+            return null;
+        }
+    }
+
     private static string FormatDpi(double dpi)
     {
         return dpi.ToString("0.##");
@@ -1548,7 +1894,6 @@ public partial class MainWindow : Window
         var targetViewport = CalculateTargetViewportSize(workArea, _imageWidth, _imageHeight);
         ResetMinimumWindowSize();
         ResizeWindowForViewportSize(targetViewport, workArea, keepWindowPosition);
-        ApplyMinimumWindowSizeForViewport(targetViewport);
     }
 
     private void ResizeWindowForCurrentScale(bool keepWindowPosition = true)
@@ -1565,29 +1910,6 @@ public partial class MainWindow : Window
 
         ResetMinimumWindowSize();
         ResizeWindowForViewportSize(targetViewport, workArea, keepWindowPosition);
-        ApplyMinimumWindowSizeForViewport(targetViewport);
-    }
-
-    private void ApplyMinimumWindowSizeForCurrentImage()
-    {
-        if (_currentImage is null || _isFullScreen || WindowState == WindowState.Maximized)
-        {
-            return;
-        }
-
-        var targetViewport = CalculateTargetViewportSize(GetCurrentMonitorWorkArea(), _imageWidth, _imageHeight);
-        ApplyMinimumWindowSizeForViewport(targetViewport);
-    }
-
-    private void ApplyMinimumWindowSizeForViewport(Size targetViewport)
-    {
-        UpdateLayout();
-
-        var widthDecoration = Math.Max(0, ActualWidth - Viewport.ActualWidth);
-        var heightDecoration = Math.Max(0, ActualHeight - Viewport.ActualHeight);
-
-        MinWidth = Math.Max(MinimumWindowWidth, targetViewport.Width + widthDecoration);
-        MinHeight = Math.Max(MinimumWindowHeight, targetViewport.Height + heightDecoration);
     }
 
     private void ResetMinimumWindowSize()
@@ -1655,17 +1977,12 @@ public partial class MainWindow : Window
 
     private void ZoomAtViewportCenter(double factor)
     {
-        Zoom(factor);
+        Zoom(factor, anchor: null);
     }
 
     private void ZoomAt(Point viewportPoint, double factor)
     {
-        Zoom(factor);
-    }
-
-    private void SetScale(double scale)
-    {
-        _zoomScale = scale;
+        Zoom(factor, viewportPoint);
     }
 
     private void SetFixedScale(double scale)
@@ -1675,14 +1992,14 @@ public partial class MainWindow : Window
             return;
         }
 
-        SetScale(scale);
+        _zoomScale = scale;
         _isFitMode = false;
         ResizeWindowForCurrentScale();
         ResetImageOffset();
         ShowScaledImage(scale, stretchUniform: false);
     }
 
-    private void Zoom(double factor)
+    private void Zoom(double factor, Point? anchor)
     {
         if (_currentImage is null)
         {
@@ -1693,10 +2010,51 @@ public partial class MainWindow : Window
             ? Math.Min(Viewport.ActualWidth / _imageWidth, Viewport.ActualHeight / _imageHeight)
             : _zoomScale;
         var scale = Math.Clamp(baseScale * factor, 0.02, 64);
-        SetScale(scale);
+        var anchorRatio = GetImageRatioAt(anchor);
+
+        _zoomScale = scale;
         _isFitMode = false;
         ResizeWindowForCurrentScale();
         ShowScaledImage(scale, stretchUniform: false);
+        RestoreZoomAnchor(anchor, anchorRatio);
+    }
+
+    /// <summary>
+    /// Position of a viewport point within the displayed image, as a 0..1 ratio of its size.
+    /// </summary>
+    private Point? GetImageRatioAt(Point? viewportPoint)
+    {
+        if (viewportPoint is not { } point ||
+            double.IsNaN(ImageView.Width) || double.IsNaN(ImageView.Height) ||
+            ImageView.Width <= 0 || ImageView.Height <= 0)
+        {
+            return null;
+        }
+
+        var left = Canvas.GetLeft(ImageView);
+        var top = Canvas.GetTop(ImageView);
+        if (double.IsNaN(left) || double.IsNaN(top))
+        {
+            return null;
+        }
+
+        return new Point((point.X - left) / ImageView.Width, (point.Y - top) / ImageView.Height);
+    }
+
+    /// <summary>
+    /// Keeps the image point that was under the mouse in place after zooming. Only has a visible
+    /// effect while the image overflows the viewport; otherwise the clamp recenters it.
+    /// </summary>
+    private void RestoreZoomAnchor(Point? viewportPoint, Point? imageRatio)
+    {
+        if (viewportPoint is not { } point || imageRatio is not { } ratio)
+        {
+            return;
+        }
+
+        _imageOffsetX = point.X - (ratio.X * ImageView.Width) - ((Viewport.ActualWidth - ImageView.Width) / 2);
+        _imageOffsetY = point.Y - (ratio.Y * ImageView.Height) - ((Viewport.ActualHeight - ImageView.Height) / 2);
+        ClampImageOffset();
     }
 
     private void ShowScaledImage(double scale, bool stretchUniform)
@@ -1793,7 +2151,6 @@ public partial class MainWindow : Window
     {
         if (_isFullScreen)
         {
-            MainMenu.Visibility = _previousMenuVisibility;
             Topmost = _previousTopmost;
             ResizeMode = _previousResizeMode;
             SetWindowedTitleBarVisible(true);
@@ -1804,6 +2161,7 @@ public partial class MainWindow : Window
             Height = _previousWindowBounds.Height;
             WindowState = WindowState.Normal;
             _isFullScreen = false;
+            ApplyMainMenuVisibility();
             _settings.StartFullScreen = false;
             _settings.Save();
             ResizeWindowForImage(keepWindowPosition: true);
@@ -1811,10 +2169,10 @@ public partial class MainWindow : Window
         else
         {
             _previousResizeMode = ResizeMode;
-            _previousMenuVisibility = MainMenu.Visibility;
             _previousWindowBounds = new Rect(Left, Top, Width, Height);
             _previousTopmost = Topmost;
 
+            // Collapse before the window is resized so the fit calculation sees the final viewport.
             MainMenu.Visibility = Visibility.Collapsed;
             WindowState = WindowState.Normal;
             WindowChrome.SetWindowChrome(this, null);
@@ -1838,17 +2196,7 @@ public partial class MainWindow : Window
     private void ToggleWindowedTitleBarVisibility()
     {
         SetWindowedTitleBarVisible(_isWindowedTitleBarHidden);
-        ApplyMinimumWindowSizeForCurrentImage();
-
-        if (Width < MinWidth)
-        {
-            Width = MinWidth;
-        }
-
-        if (Height < MinHeight)
-        {
-            Height = MinHeight;
-        }
+        ResetMinimumWindowSize();
 
         if (_isFitMode)
         {
@@ -1939,7 +2287,7 @@ public partial class MainWindow : Window
         int FrameCount,
         bool HasColorProfile);
 
-    private sealed record AnimatedImage(IReadOnlyList<AnimatedImageFrame> Frames);
+    private sealed record AnimatedImage(IReadOnlyList<AnimatedImageFrame> Frames, int RepeatCount);
 
     private sealed record AnimatedImageFrame(BitmapSource Image, TimeSpan Delay);
 

@@ -5,7 +5,7 @@ param(
 $resolvedExe = Resolve-Path -LiteralPath $ExePath -ErrorAction Stop
 $resolvedExe = $resolvedExe.Path
 $command = "`"$resolvedExe`" `"%1`""
-$extensions = ".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp", ".tif", ".tiff"
+$extensions = ".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp", ".tif", ".tiff", ".cr2", ".cr3", ".nef", ".arw", ".raf", ".orf", ".rw2", ".dng", ".heic", ".heif"
 $progId = "LetMeSee.Image"
 $appName = "LetMeSee"
 $appExeName = Split-Path -Leaf $resolvedExe
@@ -34,7 +34,7 @@ New-Item -Path "HKCU:\Software\RegisteredApplications" -Force | Out-Null
 Set-ItemProperty -Path "HKCU:\Software\RegisteredApplications" -Name $appName -Value "Software\Classes\Applications\$appExeName\Capabilities"
 
 New-Item -Path "$contextMenuKey\command" -Force | Out-Null
-Set-ItemProperty -Path $contextMenuKey -Name "MUIVerb" -Value "Open with LetMeSee"
+Set-ItemProperty -Path $contextMenuKey -Name "MUIVerb" -Value "用 LetMeSee 開啟"
 Set-ItemProperty -Path $contextMenuKey -Name "Icon" -Value $resolvedExe
 Set-Item -Path "$contextMenuKey\command" -Value $command
 
@@ -47,4 +47,4 @@ foreach ($extension in $extensions) {
 }
 
 Write-Host "Registered LetMeSee for Open With: $($extensions -join ', ')"
-Write-Host "Added image right-click command: Open with LetMeSee"
+Write-Host "Added image right-click command: 用 LetMeSee 開啟"
