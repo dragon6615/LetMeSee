@@ -9,7 +9,7 @@
 ;   dotnet publish -c Release -r win-x64 --self-contained true
 
 #ifndef AppVersion
-  #define AppVersion "1.2.0"
+  #define AppVersion "1.2.1"
 #endif
 
 #define AppName "LetMeSee"
@@ -46,10 +46,10 @@ SolidCompression=yes
 WizardStyle=modern
 
 [Languages]
-; 繁中是 Inno Setup 7 內建的語言檔。舊版沒有的話就只留英文，不讓編譯失敗。
-#if FileExists(AddBackslash(CompilerPath) + "Languages\ChineseTraditional.isl")
-Name: "cht"; MessagesFile: "compiler:Languages\ChineseTraditional.isl"
-#endif
+; 繁中語言檔放在 repo 裡（取自 Inno Setup 7 內建的 Languages\ChineseTraditional.isl，
+; 標頭註明相容 6.5.0+）。不用 compiler: 路徑是因為 CI 的 Inno Setup 6 沒有內建這個檔案，
+; 之前會安靜地降級成英文，導致本機編繁中、CI 編英文。
+Name: "cht"; MessagesFile: "ChineseTraditional.isl"
 Name: "en"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]

@@ -231,7 +231,10 @@ dotnet publish -c Release -r win-x64 --self-contained true
 - **不會**建立檔案關聯，那是 app 內「設定 > 檔案關聯...」的工作。
 - 反安裝時會清掉 app 寫進去的 per-user 關聯（`LetMeSee.Image`、`Applications\LetMeSee.exe`、圖片右鍵選單、`RegisteredApplications`），避免留下指向已刪除執行檔的關聯。因為那些鍵在 HKCU，只清得掉執行反安裝那個使用者的部分。
 - 反安裝會刪掉 `%LOCALAPPDATA%\LetMeSee`（診斷紀錄），但保留 `%APPDATA%\LetMeSee` 的 `settings.json`。
-- 介面語言：Inno Setup 7 內建繁體中文，腳本會自動採用；舊版沒有該語言檔時只留英文，不會編譯失敗。
+- 介面語言為繁體中文。語言檔 `installer/ChineseTraditional.isl` 放在 repo 裡，不是用 `compiler:` 路徑引用，
+  因為 CI 上 choco 裝的是 Inno Setup 6（目前最新 6.7.1），它沒有內建這個語言檔。
+  曾經用 `#if FileExists` 做條件式引用，結果是本機編出繁中、CI 安靜地降級成英文；改成隨附檔案後兩邊一致。
+  該檔案取自 Inno Setup 7 的內建語言檔，標頭註明相容 6.5.0 以上，作者與出處註記保留在檔案內。
 - `AppId` 是固定的 GUID，決定升級與反安裝的識別，**永遠不要改**。
 
 ## Git 注意事項

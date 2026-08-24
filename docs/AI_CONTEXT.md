@@ -44,6 +44,7 @@ dotnet publish -c Release -r win-x64 --self-contained true
 - `.github/workflows/release.yml`：推 `v*` tag 就自動 publish、打包安裝程式並建立 GitHub Release，版本號取自 tag。
 - `Services/DefaultProgramPrompt.cs`：包裝 `SHOpenWithDialog`，請 Windows 跳出「開啟方式」對話框。
 - `installer/LetMeSee.iss`：Inno Setup 腳本。安裝到 Program Files（需管理員）、不建立檔案關聯、反安裝時清掉 app 寫的 per-user 關聯。`AppId` 的 GUID 不可更改。
+- `installer/ChineseTraditional.isl`：隨附的繁中語言檔。CI 的 Inno Setup 6 沒有內建，靠 `compiler:` 路徑會安靜降級成英文，所以放進 repo。
 - `LICENSE.md`：授權限制。這不是開源授權專案。
 
 ## 核心流程
