@@ -25,6 +25,9 @@ LetMeSee 是一個以 WPF 與 .NET 9 製作的輕量 Windows 圖片檢視器。�
 - 按 `V` 可顯示或隱藏左下角圖片詳細資訊。
 - 「說明 > 開啟診斷紀錄」可查看啟動、圖片載入、檔案關聯與例外的紀錄（`%LOCALAPPDATA%\LetMeSee\letmesee.log`）。
 - 功能表「設定 > 檔案關聯...」提供設定頁面，可逐一勾選要關聯的副檔名，以及是否在圖片右鍵選單顯示「用 LetMeSee 開啟」。
+  勾選只是讓 LetMeSee 出現在「開啟方式」清單；設定頁面每一列右側會顯示該副檔名目前實際的預設開啟程式。
+- 要讓雙擊直接用 LetMeSee 開啟，可在圖片上按右鍵選「設為 .jpg 的預設開啟程式...」，程式會叫出 Windows 標準的「開啟方式」對話框；或用設定頁面的按鈕開啟 Windows 預設應用程式設定逐一指定。
+  Windows 以帶簽章的 `UserChoice` 保護預設開啟程式，任何程式都不能自行變更，只能請使用者指定。
 
 ## 支援格式
 
@@ -265,6 +268,8 @@ LetMeSee is a lightweight Windows image viewer built with WPF and .NET 9. It foc
 - Press `V` to show or hide image details in the lower-left corner.
 - 說明 > 開啟診斷紀錄 opens a diagnostic log of startup, image loads, file association changes, and unhandled exceptions (`%LOCALAPPDATA%\LetMeSee\letmesee.log`).
 - A settings page under 設定 > 檔案關聯... lets you tick individual extensions to associate, plus whether to add the image right-click command.
+  Ticking an extension only adds LetMeSee to the Open With list; each row shows which program currently opens that extension by default.
+- To make LetMeSee the default, right-click an image and choose 設為 .jpg 的預設開啟程式..., which brings up the standard Windows "Open with" dialog, or use the settings page button to open Windows' Default apps page. Windows protects the default handler with a signed UserChoice entry, so no application can change it on its own.
 
 ## Supported Formats
 

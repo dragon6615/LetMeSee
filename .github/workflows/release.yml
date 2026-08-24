@@ -1,0 +1,80 @@
+name: Release
+
+# 推送 v 開頭的 tag 就會自動建置並發佈 GitHub Release。
+# 版本號來自 tag：v1.2.0 -> 1.2.0，會覆寫 LetMeSee.csproj 的 <Version>。
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # WPF 只能在 Windows 上建置。
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Resolve version from tag
+        id: version
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}'.TrimStart('v')
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Tag '${{ github.ref_name }}' is not in the expected vMAJOR.MINOR.PATCH form."
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "package=LetMeSee-${{ github.ref_name }}-win-x64" >> $env:GITHUB_OUTPUT
+
+      - name: Publish
+        shell: pwsh
+        run: >
+          dotnet publish -c Release -r win-x64 --self-contained true
+          -p:Version=${{ steps.version.outputs.version }}
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $publishDir = 'bin\Release\net9.0-windows\win-x64\publish'
+          $exe = Get-Item "$publishDir\LetMeSee.exe"
+          Write-Host "FileVersion: $($exe.VersionInfo.FileVersion)"
+          if ($exe.VersionInfo.FileVersion -notlike '${{ steps.version.outputs.version }}*') {
+            throw "Published FileVersion does not match the tag."
+          }
+          Compress-Archive -Path "$publishDir\*" -DestinationPath '${{ steps.version.outputs.package }}.zip'
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = Get-ChildItem "$env:ProgramFiles\Inno Setup*", "${env:ProgramFiles(x86)}\Inno Setup*" `
+            -Filter ISCC.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $iscc) {
+            Write-Host 'Inno Setup not found on the runner, installing it.'
+            choco install innosetup -y --no-progress
+            $iscc = Get-ChildItem "$env:ProgramFiles\Inno Setup*", "${env:ProgramFiles(x86)}\Inno Setup*" `
+              -Filter ISCC.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+          if (-not $iscc) { throw 'ISCC.exe not found.' }
+          Write-Host "Using $($iscc.FullName)"
+          & $iscc.FullName /DAppVersion=${{ steps.version.outputs.version }} installer\LetMeSee.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compilation failed.' }
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create '${{ github.ref_name }}'
+          '${{ steps.version.outputs.package }}.zip'
+          'installer\Output\LetMeSee-${{ steps.version.outputs.version }}-setup.exe'
+          --title 'LetMeSee ${{ github.ref_name }}'
+          --generate-notes

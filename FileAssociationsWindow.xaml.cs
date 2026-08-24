@@ -1,10 +1,12 @@
 using LetMeSee.Services;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Security;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 
 namespace LetMeSee;
 
@@ -33,6 +35,17 @@ public partial class FileAssociationsWindow : Window
         ContextMenuCheckBox.IsChecked = ReadContextMenuRegistered();
         ShowRegistrationSource();
         UpdateSelectionSummary();
+
+        // 使用者可能跳去 Windows 設定或「開啟方式」對話框改預設，回來時要看到最新狀態。
+        Activated += (_, _) => RefreshDefaultHandlers();
+    }
+
+    private void RefreshDefaultHandlers()
+    {
+        foreach (var choice in AllChoices)
+        {
+            choice.RefreshDefaultHandler();
+        }
     }
 
     private IEnumerable<ExtensionChoice> AllChoices => _groups.SelectMany(group => group.Choices);
@@ -79,6 +92,7 @@ public partial class FileAssociationsWindow : Window
         }
 
         ExecutablePathText.Text = currentExecutablePath;
+        StaleRegistrationPanel.Visibility = Visibility.Collapsed;
 
         if (registeredExecutablePath is not null &&
             !string.Equals(registeredExecutablePath, currentExecutablePath, StringComparison.OrdinalIgnoreCase))
@@ -101,6 +115,30 @@ public partial class FileAssociationsWindow : Window
             // Two-state clicking even though the box renders a third, indeterminate state:
             // anything short of "all selected" turns the whole group on.
             group.SetAll(group.IsGroupSelected != true);
+        }
+    }
+
+    private void OpenDefaultAppsButton_Click(object sender, RoutedEventArgs e)
+    {
+        // Windows 用帶簽章的 UserChoice 保護預設開啟程式，任何程式都無法自行改寫，
+        // 只能把使用者帶到設定頁面自己指定。帶不認得的參數時會退回通用頁面。
+        try
+        {
+            Process.Start(new ProcessStartInfo("ms-settings:defaultapps?registeredAppUser=LetMeSee")
+            {
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or IOException)
+        {
+            DiagnosticLog.Write("開啟 Windows 預設應用程式設定失敗", ex);
+            MessageBox.Show(
+                this,
+                $"無法開啟 Windows 設定：{Environment.NewLine}{ex.Message}{Environment.NewLine}{Environment.NewLine}" +
+                "請手動開啟「設定 > 應用程式 > 預設應用程式」，搜尋 LetMeSee。",
+                "LetMeSee",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
         }
     }
 
@@ -149,20 +187,24 @@ public partial class FileAssociationsWindow : Window
             ? "已移除 LetMeSee 的檔案關聯。"
             : $"已套用 {selectedExtensions.Count} 種副檔名的檔案關聯。";
 
+        var nextStep = selectedExtensions.Count > 0
+            ? $"{Environment.NewLine}{Environment.NewLine}這只會讓 LetMeSee 出現在「開啟方式」清單。要讓雙擊直接用 LetMeSee 開啟，請用下方的「開啟 Windows 預設應用程式設定」指定。"
+            : "";
+
+        // 留在頁面上，讓使用者接著設定預設開啟程式。
+        ShowRegistrationSource();
+        RefreshDefaultHandlers();
+
         MessageBox.Show(
             this,
-            $"{summary}{Environment.NewLine}若檔案總管沒有立刻更新，請重新開啟檔案總管或登出再登入。",
+            $"{summary}{Environment.NewLine}若檔案總管沒有立刻更新，請重新開啟檔案總管或登出再登入。{nextStep}",
             "LetMeSee",
             MessageBoxButton.OK,
             MessageBoxImage.Information);
-
-        DialogResult = true;
-        Close();
     }
 
-    private void CancelButton_Click(object sender, RoutedEventArgs e)
+    private void CloseButton_Click(object sender, RoutedEventArgs e)
     {
-        DialogResult = false;
         Close();
     }
 
@@ -245,13 +287,64 @@ public partial class FileAssociationsWindow : Window
         }
     }
 
-    private sealed class ExtensionChoice(string extension, bool isSelected) : INotifyPropertyChanged
+    private sealed class ExtensionChoice : INotifyPropertyChanged
     {
-        private bool _isSelected = isSelected;
+        private static readonly Brush IsDefaultBrush = CreateFrozenBrush(Color.FromRgb(0x1F, 0x7A, 0x3D));
+        private static readonly Brush OtherDefaultBrush = CreateFrozenBrush(Color.FromRgb(0x8A, 0x8A, 0x8A));
+
+        private bool _isSelected;
+        private string? _defaultHandler;
+
+        public ExtensionChoice(string extension, bool isSelected)
+        {
+            Extension = extension;
+            _isSelected = isSelected;
+            _defaultHandler = ReadDefaultHandler(extension);
+        }
 
         public event PropertyChangedEventHandler? PropertyChanged;
 
-        public string Extension { get; } = extension;
+        public string Extension { get; }
+
+        /// <summary>右側顯示目前實際的預設開啟程式，這是 Windows 說了算的部分。</summary>
+        public string DefaultHandlerText => _defaultHandler is null
+            ? "預設：未設定"
+            : $"預設：{_defaultHandler}";
+
+        public Brush DefaultHandlerBrush =>
+            string.Equals(_defaultHandler, "LetMeSee", StringComparison.Ordinal) ? IsDefaultBrush : OtherDefaultBrush;
+
+        public void RefreshDefaultHandler()
+        {
+            var current = ReadDefaultHandler(Extension);
+            if (string.Equals(current, _defaultHandler, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _defaultHandler = current;
+            OnPropertyChanged(nameof(DefaultHandlerText));
+            OnPropertyChanged(nameof(DefaultHandlerBrush));
+        }
+
+        private static string? ReadDefaultHandler(string extension)
+        {
+            try
+            {
+                return FileAssociationRegistrar.DescribeDefaultHandler(extension);
+            }
+            catch (Exception ex) when (IsRegistryFailure(ex))
+            {
+                return null;
+            }
+        }
+
+        private static Brush CreateFrozenBrush(Color color)
+        {
+            var brush = new SolidColorBrush(color);
+            brush.Freeze();
+            return brush;
+        }
 
         public bool IsSelected
         {
@@ -264,8 +357,13 @@ public partial class FileAssociationsWindow : Window
                 }
 
                 _isSelected = value;
-                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsSelected)));
+                OnPropertyChanged(nameof(IsSelected));
             }
+        }
+
+        private void OnPropertyChanged(string propertyName)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }
     }
 }

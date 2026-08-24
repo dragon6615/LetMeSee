@@ -916,6 +916,41 @@ public partial class MainWindow : Window
         SaveAsContextMenuItem.IsEnabled = hasCurrentImage;
         RotateLeftContextMenuItem.IsEnabled = hasCurrentImage;
         RotateRightContextMenuItem.IsEnabled = hasCurrentImage;
+
+        var extension = _currentImagePath is null ? null : Path.GetExtension(_currentImagePath).ToLowerInvariant();
+        SetDefaultProgramContextMenuItem.IsEnabled = !string.IsNullOrWhiteSpace(extension) && File.Exists(_currentImagePath);
+        SetDefaultProgramContextMenuItem.Header = string.IsNullOrWhiteSpace(extension)
+            ? "設為預設開啟程式..."
+            : $"設為 {extension} 的預設開啟程式...";
+    }
+
+    private void SetDefaultProgramMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(_currentImagePath))
+        {
+            return;
+        }
+
+        var extension = Path.GetExtension(_currentImagePath).ToLowerInvariant();
+
+        try
+        {
+            // Windows 自己跳的「開啟方式」對話框：使用者按下「一律」時才會寫入預設程式。
+            var chosen = DefaultProgramPrompt.Show(new WindowInteropHelper(this).Handle, _currentImagePath);
+            DiagnosticLog.Write(chosen
+                ? $"開啟方式對話框（{extension}）：使用者已選擇，目前預設={FileAssociationRegistrar.DescribeDefaultHandler(extension) ?? "(未設定)"}"
+                : $"開啟方式對話框（{extension}）：使用者取消");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or COMException or InvalidOperationException)
+        {
+            DiagnosticLog.Write("開啟方式對話框失敗", ex);
+            MessageBox.Show(
+                this,
+                $"無法開啟 Windows 的「開啟方式」對話框：{Environment.NewLine}{ex.Message}",
+                "LetMeSee",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
     }
 
     private void SaveAsMenuItem_Click(object sender, RoutedEventArgs e)
@@ -990,6 +1025,7 @@ public partial class MainWindow : Window
             "Ctrl+C 可複製目前圖片檔案，Delete 可將目前圖片移到資源回收桶並切換下一張。",
             "視窗模式下雙擊圖片可隱藏或顯示標題列。",
             "視窗模式會顯示功能表；全螢幕時按 Alt 或雙擊畫面可叫出功能表。",
+            "右鍵選單可將 LetMeSee 設為目前圖片格式的預設開啟程式。",
             "「說明 > 開啟診斷紀錄」可以查看載入與檔案關聯的紀錄。",
             "可切換目前使用者的 Open with 與圖片右鍵選單關聯。",
             "",

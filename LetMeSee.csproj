@@ -8,9 +8,9 @@
     <UseWPF>true</UseWPF>
     <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
     <StartupObject>LetMeSee.Program</StartupObject>
-    <Version>1.1.0</Version>
-    <FileVersion>1.1.0.0</FileVersion>
-    <AssemblyVersion>1.1.0.0</AssemblyVersion>
+    <!-- 只維護這一個版本欄位；FileVersion 與 AssemblyVersion 由它衍生。
+         CI 發佈時會用 tag 覆寫（-p:Version=...），所以 tag 才是正式版的版本來源。 -->
+    <Version>1.2.0</Version>
     <Authors>Dragon Huang</Authors>
     <Company>Dragon Huang</Company>
     <Copyright>Dragon Huang</Copyright>

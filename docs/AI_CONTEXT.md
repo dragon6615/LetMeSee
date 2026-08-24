@@ -40,7 +40,10 @@ dotnet publish -c Release -r win-x64 --self-contained true
 - `FileAssociationsWindow.xaml` / `.xaml.cs`：檔案關聯設定頁面。
 - `Register-FileAssociations.ps1` / `Unregister-FileAssociations.ps1`：檔案關聯輔助腳本，和 app 內建 Setup 選單用途相近。
 - `Assets/AppIcon.ico`、`Assets/icon.png`：應用圖示資產。
-- `BuildGuide.md`：建置與 publish 流程說明。
+- `BuildGuide.md`：建置、publish 與自動發佈流程說明。
+- `.github/workflows/release.yml`：推 `v*` tag 就自動 publish、打包安裝程式並建立 GitHub Release，版本號取自 tag。
+- `Services/DefaultProgramPrompt.cs`：包裝 `SHOpenWithDialog`，請 Windows 跳出「開啟方式」對話框。
+- `installer/LetMeSee.iss`：Inno Setup 腳本。安裝到 Program Files（需管理員）、不建立檔案關聯、反安裝時清掉 app 寫的 per-user 關聯。`AppId` 的 GUID 不可更改。
 - `LICENSE.md`：授權限制。這不是開源授權專案。
 
 ## 核心流程
@@ -131,6 +134,15 @@ GIF 動畫不只顯示 WPF decoder 的 frame。`LoadAnimatedGif` 會讀 frame me
 
 副檔名清單一律來自 `SupportedImageFormats.Extensions`，registrar 和兩個 PowerShell 腳本都涵蓋 RAW 與 HEIF/HEIC。
 
+重要區別：這些註冊只讓 LetMeSee **出現在「開啟方式」清單與預設應用程式清單**，不等於預設開啟程式。真正的預設在 `HKCU\...\Explorer\FileExts\<ext>\UserChoice`，Windows 8 之後用帶簽章的 `Hash` 保護，程式寫不進去也不該嘗試。設定頁面每一列右側會用 `DescribeDefaultHandler` 顯示該副檔名目前的預設程式（讀 `UserChoice` 的 ProgID），視窗 `Activated` 時重新讀取，所以去 Windows 設定改完切回來就會更新。
+
+指定預設有兩條路，都由使用者按下最後一步：
+
+- 圖片右鍵「設為 .jpg 的預設開啟程式...」→ `Services/DefaultProgramPrompt.cs` 呼叫 `SHOpenWithDialog`，帶 `OAIF_ALLOW_REGISTRATION | OAIF_REGISTER_EXT`，跳出 Windows 標準的「開啟方式」對話框。
+- 設定頁面的按鈕 → `ms-settings:defaultapps?registeredAppUser=LetMeSee`。
+
+注意 `IsOurProgId`：使用者若是用「瀏覽到執行檔」指定的，Windows 記的是 `Applications\LetMeSee.exe` 而不是 `LetMeSee.Image`，兩者都要算成 LetMeSee。套用後對話框不會關閉，方便使用者接著設定預設。
+
 ## 開發慣例
 
 - 優先維持小型架構；目前沒有 MVVM 分層，UI 事件與狀態集中在 `MainWindow.xaml.cs`。
@@ -141,9 +153,10 @@ GIF 動畫不只顯示 WPF decoder 的 frame。`LoadAnimatedGif` 會讀 frame me
 - 非關鍵背景工作，例如預載，失敗時不要中斷可見圖片載入。
 - 修改支援格式時只改 `Services/SupportedImageFormats.cs`；瀏覽判斷、OpenFileDialog filter、About 清單與檔案關聯都由它衍生。另外要同步 README 與兩個 PowerShell 腳本。
 - 修改快捷鍵或 UI 行為時，同步更新 `README.md` 的快捷鍵與功能描述。
-- 修改 publish/build 流程時，同步更新 `BuildGuide.md`。
+- 修改 publish/build 流程時，同步更新 `BuildGuide.md`、`.github/workflows/release.yml` 與 `installer/LetMeSee.iss`。
 - `bin/`、`obj/`、`publish/` 是產物，不要提交或手動維護。
 - publish 一律用 .NET 預設輸出位置（`bin/Release/net9.0-windows/win-x64/publish/`），不要加 `-o` 改路徑。
+- 版本號只維護 `LetMeSee.csproj` 的 `<Version>`；`FileVersion`／`AssemblyVersion` 由它衍生，CI 發佈時再用 tag 覆寫。
 
 ## 已知限制與注意事項
 

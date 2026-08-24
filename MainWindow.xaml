@@ -63,6 +63,10 @@
                                   Header="另存新檔(_A)..."
                                   Click="SaveAsMenuItem_Click" />
                         <Separator />
+                        <MenuItem x:Name="SetDefaultProgramContextMenuItem"
+                                  Header="設為預設開啟程式..."
+                                  Click="SetDefaultProgramMenuItem_Click" />
+                        <Separator />
                         <MenuItem x:Name="RotateLeftContextMenuItem"
                                   Header="向左旋轉 90 度(_L)"
                                   Click="RotateLeftMenuItem_Click" />

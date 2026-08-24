@@ -84,13 +84,27 @@
             </StackPanel>
         </Border>
 
+        <Border DockPanel.Dock="Bottom" Style="{StaticResource CardBorder}" Margin="0,8,0,0">
+            <StackPanel>
+                <TextBlock Text="預設開啟程式" Style="{StaticResource CardTitle}" />
+                <TextBlock Style="{StaticResource CardDescription}"
+                           Margin="0,4,0,0"
+                           Text="上面的勾選只會讓 LetMeSee 出現在「開啟方式」清單裡；每一列右側顯示的才是目前實際的預設開啟程式。Windows 不允許程式自行變更預設，只能由你指定：在圖片上按右鍵選「設為 .jpg 的預設開啟程式...」最快，或用下面的按鈕開啟 Windows 設定逐一指定。" />
+                <Button Content="開啟 Windows 預設應用程式設定"
+                        HorizontalAlignment="Left"
+                        MinWidth="0"
+                        Margin="0,10,0,0"
+                        Click="OpenDefaultAppsButton_Click" />
+            </StackPanel>
+        </Border>
+
         <Border DockPanel.Dock="Bottom" Style="{StaticResource CardBorder}" Margin="0,12,0,0">
             <StackPanel>
                 <CheckBox x:Name="ContextMenuCheckBox" VerticalContentAlignment="Center">
                     <TextBlock Text="圖片右鍵選單" Style="{StaticResource CardTitle}" />
                 </CheckBox>
                 <TextBlock Style="{StaticResource CardDescription}"
-                           Text="在檔案總管的圖片上按右鍵時，顯示「用 LetMeSee 開啟」。" />
+                           Text="在檔案總管的圖片上按右鍵時，顯示「用 LetMeSee 開啟」。這個項目不受預設開啟程式影響，隨時可用。" />
             </StackPanel>
         </Border>
 
@@ -104,7 +118,7 @@
                 <Button Content="全選" Margin="0,0,8,0" Click="SelectAllButton_Click" />
                 <Button Content="全部取消" Margin="0,0,8,0" Click="SelectNoneButton_Click" />
                 <Button Content="套用" Margin="0,0,8,0" IsDefault="True" Click="ApplyButton_Click" />
-                <Button Content="取消" IsCancel="True" Click="CancelButton_Click" />
+                <Button Content="關閉" IsCancel="True" Click="CloseButton_Click" />
             </StackPanel>
         </DockPanel>
 
@@ -131,18 +145,21 @@
                                 <TextBlock Text="{Binding Description}" Style="{StaticResource CardDescription}" />
 
                                 <ItemsControl ItemsSource="{Binding Choices}" Margin="26,8,0,0">
-                                    <ItemsControl.ItemsPanel>
-                                        <ItemsPanelTemplate>
-                                            <WrapPanel />
-                                        </ItemsPanelTemplate>
-                                    </ItemsControl.ItemsPanel>
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
-                                            <CheckBox Content="{Binding Extension}"
-                                                      IsChecked="{Binding IsSelected, Mode=TwoWay}"
-                                                      MinWidth="78"
-                                                      Margin="0,3,14,3"
-                                                      VerticalContentAlignment="Center" />
+                                            <DockPanel Margin="0,3,0,3">
+                                                <TextBlock DockPanel.Dock="Right"
+                                                           Text="{Binding DefaultHandlerText}"
+                                                           Foreground="{Binding DefaultHandlerBrush}"
+                                                           FontSize="12.5"
+                                                           VerticalAlignment="Center"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           Margin="12,0,2,0" />
+                                                <CheckBox Content="{Binding Extension}"
+                                                          IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                          MinWidth="78"
+                                                          VerticalContentAlignment="Center" />
+                                            </DockPanel>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>

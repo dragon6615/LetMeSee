@@ -2,6 +2,7 @@
 bin/
 obj/
 publish/
+installer/Output/
 
 # User-specific IDE files
 .vs/

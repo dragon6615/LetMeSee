@@ -9,6 +9,7 @@ public static class FileAssociationRegistrar
 {
     private const string AppName = "LetMeSee";
     private const string ProgId = "LetMeSee.Image";
+    private const string AppExeName = "LetMeSee.exe";
     private const string ContextMenuKeyPath = @"Software\Classes\SystemFileAssociations\image\shell\LetMeSee";
     private const string RegisteredApplicationsKeyPath = @"Software\RegisteredApplications";
 
@@ -27,6 +28,69 @@ public static class FileAssociationRegistrar
     {
         using var openWithProgIdsKey = Registry.CurrentUser.OpenSubKey($@"Software\Classes\{extension}\OpenWithProgids");
         return openWithProgIdsKey?.GetValue(ProgId) is not null;
+    }
+
+    /// <summary>
+    /// 目前用來開啟這個副檔名的 ProgID，沒有設定過則為 null。這個值由 Windows 維護
+    /// （`UserChoice`，帶簽章保護），程式只能讀，不能寫。
+    /// </summary>
+    public static string? GetDefaultHandlerProgId(string extension)
+    {
+        using var userChoiceKey = Registry.CurrentUser.OpenSubKey(
+            $@"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{extension}\UserChoice");
+        return userChoiceKey?.GetValue("ProgId") as string;
+    }
+
+    public static bool IsDefaultHandler(string extension)
+    {
+        return IsOurProgId(GetDefaultHandlerProgId(extension));
+    }
+
+    /// <summary>
+    /// 我們註冊的 ProgID 是 <c>LetMeSee.Image</c>，但使用者若是透過「開啟方式 &gt; 瀏覽到執行檔」
+    /// 指定的，Windows 會記成 <c>Applications\LetMeSee.exe</c>。兩者都算是 LetMeSee。
+    /// </summary>
+    private static bool IsOurProgId(string? progId)
+    {
+        if (string.IsNullOrWhiteSpace(progId))
+        {
+            return false;
+        }
+
+        if (string.Equals(progId, ProgId, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        const string applicationsPrefix = @"Applications\";
+        return progId.StartsWith(applicationsPrefix, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(progId[applicationsPrefix.Length..], AppExeName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// 目前預設開啟程式的顯示名稱，沒有設定過則為 null。
+    /// </summary>
+    public static string? DescribeDefaultHandler(string extension)
+    {
+        var defaultProgId = GetDefaultHandlerProgId(extension);
+        if (string.IsNullOrWhiteSpace(defaultProgId))
+        {
+            return null;
+        }
+
+        if (IsOurProgId(defaultProgId))
+        {
+            return AppName;
+        }
+
+        using var classKey = Registry.ClassesRoot.OpenSubKey(defaultProgId);
+        var description = classKey?.GetValue("") as string;
+
+        // 描述字串常是 "@C:\path\app.exe,-101" 這種間接資源字串，直接顯示會很醜，
+        // 這種情況退回 ProgID 本身，至少看得出是哪套軟體。
+        return string.IsNullOrWhiteSpace(description) || description.StartsWith('@')
+            ? defaultProgId
+            : description;
     }
 
     public static bool IsImageContextMenuRegistered()
